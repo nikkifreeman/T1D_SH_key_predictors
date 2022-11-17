@@ -1,0 +1,552 @@
+---
+title: "SH Data Preparation"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r chunk set up, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r "packages, scripts, and data", include = FALSE}
+# Packages
+library(tidyverse)
+
+# Scripts
+source("2_dataPreparation.R")
+
+# Data
+analysisRaw <- read_csv("../2_pipeline/1_analysis_raw.csv")
+```
+
+# Assess missingness
+Summaries exclude the two study participants (PtIDs 194 and 183) that do not have any demographic data. They will not be included in the analysis.
+
+## Demographics, lifestyle, and diabetes management
+
+### Sex
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "Gender")
+```
+Sex is a complete variable; no additional cleaning.
+
+### Race
+```{r}
+getOverallStratifiedCounts(analysisRaw, "Race")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(str_detect(Race, 'Unknown'))
+```
+PtID 157: Race is "Unknown/not reported" and ethnicity is "Hispanic or Latino"
+
+
+### Ethnicity
+```{r}
+getOverallStratifiedCounts(analysisRaw, "Ethnicity")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(str_detect(Ethnicity, "Unknown"))
+```
+PtID 69: Race is white and ethnicity is Unknown/not reported
+
+### Age
+Still looking for this in the CRFs
+
+### Disease duration
+Propose defn: Age - Age dx; have age dx, still looking for age
+
+### Age of T1 dx
+```{r}
+getOverallStratifiedCounts(analysisRaw, "T1DDiagAge")
+```
+None are missing
+
+```{r, include= FALSE}
+analysisRaw <- analysisRaw %>% select(-T1DDiagAgeUnk)
+
+```
+
+
+
+### Education
+```{r}
+getOverallStratifiedCounts(analysisRaw, "EduLevel")
+getOverallStratifiedCounts(analysisRaw, "EduLevelNoAns")
+getOverallStratifiedCounts(analysisRaw, "EduLevelUnk")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(EduLevelNoAns == 1)
+```
+PtIDs 165 and 167: No answer to the education level question
+
+Use the same education categories as Weinstock (2016): Less than HS or high school diploma/GED, some college/associate or bachelor degree, master/professional or doctorate degree
+
+```{r}
+analysisRaw %>% select(EduLevel) %>%
+  distinct()
+
+analysisRaw <- analysisRaw %>%
+  mutate(educationCat = if_else(EduLevel %in% c("High school graduate/diploma/GED",
+                                                "11th Grade",
+                                                "12th Grade - no diploma",
+                                                "7th or 8th Grade",
+                                                "9th Grade"), "HS", "?")) %>%
+  mutate(educationCat = if_else(EduLevel %in% c("Associate Degree",
+                                                "Bachelor's Degree",
+                                                "Some college but no degree"), 
+                                "College", educationCat)) %>%
+  mutate(educationCat = if_else(EduLevel %in% c("Doctorate Degree",
+                                                "Master's Degree",
+                                                "Professional Degree"),
+                                "Advanced degree", educationCat)) %>%
+  mutate(educationCat = if_else(EduLevelNoAns == 1 & !is.na(EduLevelNoAns), as.character(NA), educationCat)) %>%
+  select(-c(EduLevel, EduLevelNoAns, EduLevelUnk))
+
+getOverallStratifiedCounts(analysisRaw %>% filter(str_detect(exclude, "No")), "educationCat")
+```
+With the new education categories, PtIDs 165 and 167 continue to be missing
+
+### Health Insurance
+```{r}
+analysisRaw %>% 
+  filter(str_detect(exclude, "No")) %>%
+  group_by(InsPriv, InsGov, InsSingleService, InsNoCoverage, InsUnkown, InsNoAns) %>%
+  count()
+```
+
+```{r, include = FALSE}
+analysisRaw %>% 
+  rowwise() %>%
+  mutate(anyInsurance = sum(c(InsPriv, InsGov, InsSingleService), na.rm = TRUE)) %>%
+  select(-c(InsPriv, InsGov, InsSingleService)) %>%
+  select(PtID, anyInsurance, InsNoCoverage, InsUnkown, InsNoAns) %>%
+  filter(anyInsurance == 0)
+```
+PtIDs 19, 33, 1: No insurance coverage
+PtID 74: Did not answer
+
+Create a new variable for has insurance/does not have insurance coverage
+
+```{r}
+analysisRaw <- analysisRaw %>% 
+  rowwise() %>%
+  mutate(nInsurance = sum(c(InsPriv, InsGov, InsSingleService), na.rm = TRUE)) %>% 
+  mutate(anyInsurance = if_else(nInsurance > 0, 1, -1),
+         anyInsurance = if_else(!is.na(InsNoCoverage) & InsNoCoverage == 1, 0, anyInsurance),
+         anyInsurance = if_else(InsNoAns == 1 & !is.na(InsNoAns), as.numeric(NA), anyInsurance)) %>%
+  select(-c(InsPriv, InsGov, InsSingleService, InsNoAns, InsNoCoverage))  %>%
+  ungroup()
+
+getOverallStratifiedCounts(analysisRaw, "anyInsurance")
+```
+With the new variable `anyInsurance`, only PtID 74 is missing.
+
+### BMI
+
+Construct the BMI variable from height and weight (kg/m^2). Round to 1 decimal place as is customary in reporting.
+
+```{r}
+# construct the BMI variable
+analysisRaw <- analysisRaw %>%
+  # Convert pounds to kilograms
+  mutate(bmiNumerator = if_else(WeightUnits == "kg", Weight, -1),
+         bmiNumerator = if_else(WeightUnits == "lbs", Weight*0.453592, bmiNumerator),
+         bmiDenominator = if_else(HeightUnits == "cm", (Height*0.01)^2, -1),
+         bmiDenominator = if_else(HeightUnits == "in", (Height*0.0254)^2, bmiDenominator),
+         bmi = round(bmiNumerator/bmiDenominator, 1)) %>%
+  select(-c(Weight, WeightUnits, WeightUnk, Height, HeightUnk, HeightUnits, bmiNumerator, bmiDenominator))
+
+analysisRaw %>%
+  ggplot(aes(x = bmi)) +
+  geom_histogram(bins = 10) +
+  theme_minimal() +
+  xlab("BMI") +
+  ylab("Count")
+```
+
+PtIDs 124, 16, 30, and 112: Incomplete data for BMI calculation (All are missing height; 112 also missing weight)
+
+As in Weinstock (2016), we'll also create a categorical bmi variable:  underweight (BMI <18.5), normal weight (18.5 <= BMI < 25), overweight (25 <= BMI < 30), obese (BMI >= 30)
+
+```{r}
+analysisRaw <- analysisRaw %>%
+  mutate(bmiCat = if_else(bmi <18.5, "underweight", "?"),
+         bmiCat = if_else(18.5 <= bmi & bmi < 25, "normal", bmiCat),
+         bmiCat = if_else(25 <= bmi & bmi < 30, "overweight", bmiCat),
+         bmiCat = if_else(bmi >= 30, "obese", bmiCat)) 
+
+analysisRaw %>%
+  filter(str_detect(exclude, "No")) %>%
+  ggplot(aes(x = bmiCat)) +
+  geom_bar() +
+  scale_x_discrete(name = "BMI category",
+                   breaks = c("underweight", "normal", "overweight", "obese", NA),
+                   labels = c("Underweight", "Normal", "Overweight", "Obese", "Missing")) +
+  theme_minimal() +
+  ylab("Count")
+```
+
+
+### Exercise (days/week)
+```{r}
+analysisRaw %>% select(PtID, DaysWkEx, DaysWkExUnk, DaysWkExDNA) %>%
+  ggplot(aes(x = DaysWkEx)) +
+  geom_histogram(bins = 8) +
+  xlab("Number of days") +
+  ylab("Count")
+
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(DaysWkExUnk == 1) 
+analysisRaw %>% filter(is.na(DaysWkEx))
+analysisRaw <- analysisRaw %>% select(-c(DaysWkExDNA, DaysWkExUnk))
+```
+PtIDs 124 and 27: Exercise days per week is unknown
+
+### Alcohol use
+
+```{r}
+analysisRaw <- analysisRaw %>%
+  mutate(DaysMoDrinkAlc = if_else(!is.na(DaysWkDrinkAlcNone) & DaysWkDrinkAlcNone == 1, 0, DaysWkDrinkAlc)) %>%
+  select(-c(DaysWkDrinkAlc, DaysWkDrinkAlcNone, DaysWkDrinkAlcUnk))
+
+getOverallStratifiedCounts(analysisRaw, "DaysMoDrinkAlc")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(DaysMoDrinkAlc))
+```
+
+PtID 195: is missing Days month drink alcohol
+
+### Lives alone
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "LiveAlone")
+```
+This variable is complete
+
+### Insulin pump use (Y/N)
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "InsDeliveryMethod")
+```
+This variable is complete.
+
+### Daily dose
+
+Following Weinstock (2016) we'll categorize units of total insulin as <40, 40-60, and >= 60
+```{r}
+analysisRaw <- analysisRaw %>%
+  mutate(insDoseCat = if_else(UnitsInsTotal < 40, "less40", "?"),
+         insDoseCat = if_else(UnitsInsTotal >= 40 & UnitsInsTotal < 60, "40to60", insDoseCat),
+         insDoseCat = if_else(UnitsInsTotal >= 60, "greater60", insDoseCat)) %>%
+  select(-c(UnitsInsTotalUnk, UnitsInsTotal))
+
+getOverallStratifiedCounts(analysisRaw, "insDoseCat")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(insDoseCat))
+```
+PtIDs 19, 196, 164, 84, 110, 91, 24, 149, 138, 113, 124, 27, 129, 109, 1, 98, 74, 126 are missing insulin dose
+
+```{r}
+# Analysis of basal/long acting and bolus/short acting
+getOverallStratifiedCounts(analysisRaw, "UnitsInsBasalOrLongAct")
+getOverallStratifiedCounts(analysisRaw, "NumPumpBolusOrShortAct")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(UnitsInsBasalOrLongAct)) %>% select(PtID, UnitsInsBasalOrLongAct, UnitsInsBasalOrLongActUnk)
+analysisRaw %>% filter(is.na(NumPumpBolusOrShortAct)) %>% select(PtID, NumPumpBolusOrShortAct, NumPumpBolusOrShortActUnk)
+analysisRaw <- analysisRaw %>% select(-c(UnitsInsBasalOrLongActUnk, NumPumpBolusOrShortActUnk))
+```
+`UnitsInsBasalOrLongAct` is missing for PtIDs: 56, 181, 144, 91, 153, 131, 150, 140, 149, 14, 138, 113, 124, 191, 129, 12, 120, 35, 60, 18, 66, 15, 176, 193, 46, 147, 160
+
+`NumPumpBolusOrShortAct` is missing for PtIDs: 181, 136, 81, 148, 184, 165, 110, 116, 91, 153, 150, 149, 14, 113, 124, 27, 191, 129, 12, 120, 60, 93, 156, 78, 185, 18, 66, 122, 74, 183, 193, 126, 160, 85
+
+### Frequency of testing glucose
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "NumMeterCheckDay")
+```
+This variable is complete.
+
+### HbA1c
+```{r}
+analysisRaw %>% 
+  ggplot(aes(x = HBA1C)) +
+  geom_histogram()
+```
+
+```{r, include = FALSE}
+analysisRaw %>% select(PtID, HBA1C) %>% filter(is.na(HBA1C))
+
+```
+This variable is complete
+
+
+### Detectable C-peptide
+Table 2 says detectable C-peptide is >= 0.017
+```{r}
+# Make the detectable c-pep variable
+analysisRaw <- analysisRaw %>% 
+  mutate(detectableCPEP = if_else(CPEP != "<0.017", 1, 0)) %>% 
+  select(-CPEP)
+
+analysisRaw %>% ggplot(aes(x = detectableCPEP)) +
+  geom_bar()
+  
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(detectableCPEP)) %>% select(PtID)
+
+```
+Missing for PtIDs: 188, 74
+
+### Beta blocker use
+
+```{r}
+analysisRaw %>%
+  ggplot(aes(x = betaBlocker)) +
+  geom_bar()
+```
+```{r}
+analysisRaw %>% filter(is.na(betaBlocker))
+```
+No meds were recorded for 153 and 52; study completion form says no medications to be entered
+
+### Abnormal creatinine
+Table 2 says Abnormal creatinine defined as >1.1 mg/dL for females and >1.2 mg/dL for males
+
+Waiting on definition
+```{r}
+# construct abnormalCreatine
+analysisRaw <- analysisRaw %>% 
+  mutate(abnormalCreatinine = if_else((`CREA-S` > 1.1 & Gender == "F") | (`CREA-S` > 1.2 & Gender == "M"), 1, 0)) %>%
+  select(-`CREA-S`)
+getOverallStratifiedCounts(analysisRaw, "abnormalCreatinine")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(abnormalCreatinine)) %>% select(PtID)
+
+```
+PtIDs 188 and 74 are missing creatinine measures
+
+### History of DKA
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "NumHospDKA")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(NumHospDKA)) %>% select(PtID, NumHospDKA, NumHospDKAUnk)
+
+analysisRaw <- analysisRaw %>% select(-NumHospDKAUnk)
+
+getOverallStratifiedCounts(analysisRaw, "NumHospDKA")
+```
+PtID 143: Number of hosptal DKA is unknown
+
+There's not a lot of variation here. Recode as 0 vs 1+? Still not going to have a lot of variation (e.g. only 2 among the controls)
+
+## Cogntive assessments
+### Montreal Cognitive Assessment
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "MoCATotal")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(MoCATotal)) %>% select(PtID, MoCATotal, MoCANotDone)
+
+analysisRaw <- analysisRaw %>% select(-MoCANotDone)
+```
+PtID 144: MoCA was not done
+
+### Hopkins Verbal Learning Test - Total Recall
+
+Need to learn how this is scored
+
+### Hopkins Verbal Learning Test - Delayed Recall
+
+Need to learn how this is scored
+
+### Symbol Digit Modalities Test - Written
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "SymbDigWTotCorr")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(SymbDigWTotCorr)) %>% select(PtID, SymbDigWTotCorr, SymbDigWNotDone)
+
+analysisRaw <- analysisRaw %>% select(-SymbDigWNotDone)
+```
+PtIDs 24, 131, 150, 13, 7, 140, 149, 124: Symbol digit modalities test written was not done
+
+### Symbol Digit Modalities Test - Oral
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "SymbDigOTotCorr")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(SymbDigOTotCorr)) %>% select(PtID, SymbDigOTotCorr, SymbDigONotDone)
+
+analysisRaw <- analysisRaw %>% select(-SymbDigONotDone)
+```
+PtIDs: 115, 24, 131, 150, 13, 7, 140, 149 113: Symbol Digit Modalities Test - Oral was not done
+
+### Trail Making Test - Trail A
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "TrailMakATotTime")
+```
+
+This variable is complete
+
+```{r, include = FALSE}
+analysisRaw <- analysisRaw %>% select(-TrailMakANotDone)
+```
+
+
+### Train making Test - Trail B
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "TrailMakBTotTime")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(TrailMakBTotTime)) %>% select(PtID, TrailMakBTotTime, TrailMakBNotDone)
+
+analysisRaw <- analysisRaw %>% select(-TrailMakBNotDone)
+```
+
+PtIDs 56, 47, 144, 4, 159, 150: Trail Make B was not done
+
+### Grooved Pegboard Test (dominant hand)
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "GrPegDomTotTime")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(GrPegDomTotTime)) %>% select(PtID, GrPegDomTotTime, GrPegDomNotDone)
+
+analysisRaw <- analysisRaw %>% select(-GrPegDomNotDone)
+```
+
+PtIDs 4, 132: Test was not done
+
+### Geriatric depresssion scale
+
+```{r}
+analysisRaw %>%
+  ggplot(aes(x = geriDepressionScore)) +
+  geom_histogram(bins = 16)
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(geriDepressionScore)) %>%
+  select(PtID, geriDepressionScore)
+```
+Incomplete score for PtID 80 (missing scores for 4 items)
+
+
+### Diabetes numeracy test
+
+Need to know how to score this
+```{r}
+analysisRaw %>%
+  ggplot(aes(x = diabNumeracyScore)) +
+  geom_histogram(bins = 16)
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(diabNumeracyScore)) %>% select(PtID, diabNumeracyScore)
+```
+Missing some number of items and thus a score for PtIDs: 4, 79, 175, 164, 159, 180, 153, 140, 60, 30, 32, 103,  121, 89, 83
+
+### Functional activities questioinnaire
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "FuncActTotTestScore")
+```
+This variable is complete
+
+```{r}
+analysisRaw <- analysisRaw %>% select(-FuncActNotDone)
+```
+
+
+### Hypoglycemia fear survey
+
+Need to know how to score this
+
+
+### Duke social support
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "DukeSocTotDSSI")
+```
+
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(DukeSocTotDSSI)) %>% select(PtID, DukeSocNotDone, DukeSocTotDSSI)
+
+analysisRaw <- analysisRaw %>% select(-DukeSocNotDone)
+```
+
+PtID 124: Duke social score was not done
+
+### Frailty
+
+Taking the average of the measured frailty walks
+
+```{r}
+analysisRaw <- analysisRaw %>% 
+  mutate(FrailtyFirstWalkTotTimeMin = FrailtyFirstWalkTotTimeMin*60,
+         FrailtySecWalkTotTimeMin = FrailtySecWalkTotTimeMin*60,
+         frailty1 = FrailtyFirstWalkTotTimeMin + FrailtyFirstWalkTotTimeSec,
+         frailty2 = FrailtySecWalkTotTimeMin + FrailtySecWalkTotTimeSec) %>%
+  rowwise() %>%
+  mutate(frailty = mean(c(frailty1, frailty2), na.rm = TRUE)) %>%
+  select(-c(FrailtyFirstWalkTotTimeMin, FrailtyFirstWalkTotTimeSec, 
+            FrailtySecWalkTotTimeMin, FrailtySecWalkTotTimeSec, frailty1, frailty2))
+
+analysisRaw %>%
+  ggplot(aes(x = frailty)) +
+  geom_histogram(binwidth = 0.5)
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(frailty))
+```
+PtIDs 14 and 112 missing frailty score
+
+### Hypoglycemia unawareness
+
+```{r}
+getOverallStratifiedCounts(analysisRaw, "hypoUnaware")
+```
+```{r, include = FALSE}
+analysisRaw %>% filter(is.na(hypoUnaware))
+```
+PtIDs 144, 158, 80 are missing hypoglycemia awareness
+
+
+```{r}
+names(analysisRaw)
+analysisRaw <- analysisRaw %>% select(-c(FreqHypoDamage, DangersHighBG, VisitDaysFromEnroll, BGVisit1NotDone,
+                          T1DDiagAge, InsUnkown, DealHypoEp, UndertreatHypo, HighBGDamage,
+                          nInsurance, NumMeterCheckDayUnk, BBGAttitudeScaleNotDone, BGVisit1NotDone)) 
+analysisObs <- analysisRaw %>% filter(str_detect(exclude, "No")) 
+
+analysisObs[complete.cases(analysisObs), ] %>%
+  group_by(BCaseControlStatus) %>%
+  count()
+
+analysisRaw %>% write_csv("../2_pipeline/2_analysisWithMissing.csv")
+```
+

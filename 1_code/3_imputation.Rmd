@@ -1,0 +1,117 @@
+---
+title: "Imputation"
+output: html_notebook
+---
+
+```{r}
+# Packages
+library(tidyverse)
+library(mice)
+library(caret)
+library(randomForest)
+
+# analysis data with missing
+analysisWithMissing <- readr::read_csv("../2_pipeline/2_analysisWithMissing.csv")
+```
+
+
+Visualize missingness
+
+```{r}
+md.pattern(analysisWithMissing, rotate.names = TRUE)
+```
+
+Analysis on the imputed data
+
+```{r}
+# convert categorical variables into factor type
+analysisWithMissing <- analysisWithMissing %>%
+  mutate(NumSHLastYr = as.factor(NumSHLastYr),
+         hypoUnaware = as.factor(hypoUnaware),
+         educationCat = as.factor(educationCat),
+         bmiCat = as.factor(bmiCat),
+         insDoseCat = as.factor(insDoseCat)) %>%
+  mutate(BCaseControlStatus = if_else(BCaseControlStatus == "Case", 1, 0))
+
+# Do multiple imputation
+imputationObj <- mice(analysisWithMissing %>% filter(str_detect(exclude, "No")), seed = 5678)
+imputedData <- complete(imputationObj, action = "long")
+
+# Fit random forest to each imputation data set
+fmla <- as.formula("BCaseControlStatus ~ Gender + Race + Ethnicity + DaysWkEx + LiveAlone + InsDeliveryMethod + 
+                         UnitsInsBasalOrLongAct + NumPumpBolusOrShortAct + NumMeterCheckDay +
+                         NumHospDKA + NumSHLastYr + HBA1C + betaBlocer +
+                         SymbDigWTotCorr + SymbDigOTotCorr + TRailMakATotTime + TrailMakBTotTime + 
+                         GrPegDomTotTime + FuncActTotTestScore + DukeSocTotDSSI + geriDepressionScore +
+                         hypoUnaware + diabNumeracyScore + MoCATotal + educationCat + anyInsurance +
+                         bmi + DaysMoDrinkAlc + insDoseCat + detectableCPEP + abnormalCreatinine + frailty")
+rfObj <- with(imputationObj, 
+              randomForest(BCaseControlStatus ~ Gender + Race + Ethnicity + 
+                             DaysWkEx + LiveAlone + InsDeliveryMethod + 
+                             UnitsInsBasalOrLongAct + NumPumpBolusOrShortAct + 
+                             NumMeterCheckDay + NumHospDKA + NumSHLastYr + 
+                             HBA1C + betaBlocker + SymbDigWTotCorr + 
+                             SymbDigOTotCorr + TrailMakATotTime + 
+                             TrailMakBTotTime + GrPegDomTotTime + 
+                             FuncActTotTestScore + DukeSocTotDSSI +
+                             geriDepressionScore + hypoUnaware + 
+                             diabNumeracyScore + MoCATotal + educationCat + 
+                             anyInsurance + bmi + DaysMoDrinkAlc + insDoseCat + 
+                             detectableCPEP + abnormalCreatinine + frailty))
+data.frame(rfObj$analyses[[1]]$importance) %>%
+  arrange(desc(IncNodePurity))
+data.frame(rfObj$analyses[[2]]$importance) %>%
+  arrange(desc(IncNodePurity))
+data.frame(rfObj$analyses[[3]]$importance) %>%
+  arrange(desc(IncNodePurity))
+data.frame(rfObj$analyses[[4]]$importance) %>%
+  arrange(desc(IncNodePurity))
+data.frame(rfObj$analyses[[5]]$importance) %>%
+  arrange(desc(IncNodePurity))
+```
+
+Create the testing set
+
+```{r}
+completeCases <- analysisWithMissing[complete.cases(analysisWithMissing),]
+testSet <- caret::createDataPartition(y  = completeCases$BCaseControlStatus, p = 0.40)
+testSetIDs <- completeCases[testSet[[1]],]$PtID
+testingData <- analysisWithMissing %>% filter(PtID %in% testSetIDs)
+
+# remove the test set from the imputation data sets; this yields the training set
+trainingSets <- imputedData %>% filter(!(PtID %in% testSetIDs))
+
+# Put each of the training sets in a list
+trainingSetListHelper <- function(df, k){
+  df %>% filter(.imp == k) %>%
+    select(-c(.imp, .id, PtID, exclude))
+}
+trainingSets_list <- map(1:5, trainingSetListHelper, df = trainingSets)
+
+rfObjs <- map(trainingSets_list, randomForest::randomForest, formula = BCaseControlStatus ~ Gender + Race + Ethnicity + 
+                             DaysWkEx + LiveAlone + InsDeliveryMethod + 
+                             UnitsInsBasalOrLongAct + NumPumpBolusOrShortAct + 
+                             NumMeterCheckDay + NumHospDKA + NumSHLastYr + 
+                             HBA1C + betaBlocker + SymbDigWTotCorr + 
+                             SymbDigOTotCorr + TrailMakATotTime + 
+                             TrailMakBTotTime + GrPegDomTotTime + 
+                             FuncActTotTestScore + DukeSocTotDSSI +
+                             geriDepressionScore + hypoUnaware + 
+                             diabNumeracyScore + MoCATotal + educationCat + 
+                             anyInsurance + bmi + DaysMoDrinkAlc + insDoseCat + 
+                             detectableCPEP + abnormalCreatinine + frailty)
+
+temp <- randomForest(x = trainingSets_list[[1]] %>% 
+                       dplyr::select(-BCaseControlStatus), 
+                     y = factor(trainingSets_list[[1]]$BCaseControlStatus))
+importance(temp)
+
+testingData %>% dplyr::select(PtID, truth = BCaseControlStatus) %>%
+  mutate(predicted = 
+predict(temp, testingData %>% dplyr::select(-c(BCaseControlStatus, PtID, exclude)))) %>%
+  group_by(truth, predicted) %>% count()
+data.frame(importance(temp)) %>%
+  rownames_to_column(var = "predictor") %>%
+  arrange(-MeanDecreaseGini)
+```
+

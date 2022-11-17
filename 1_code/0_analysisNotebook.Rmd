@@ -1,0 +1,118 @@
+---
+title: "Identification of key risk factors associated with severe hypoglycemia in older
+  adults with Type 1 Diabetes"
+author: "Nikki L. B. Freeman"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+This notebook contains the main steps in the analysis for "Identification of key risk factors associated with severe hypoglycemia in older adults with Type 1 Diabetes". Function files are located in the same directory as this notebook. 
+
+# Packages, functions, and data
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+# Packages needed for the analysis
+library(tidyverse)
+library(mice)
+library(caret)
+library(randomForest)
+library(glmnet)
+
+# Functions
+source("1_createAnalysisRaw.R")
+source("2_dataPreparation2.R")
+source("3_imputation.R")
+source("4_randomForest.R")
+source("5_regLogisticReg.R")
+
+# Load the raw data
+dataTables <- getRawDataTables("../")
+```
+
+# Data cleaning and preparation
+```{r}
+# Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
+# Some variables are missing their scores or are re-coded
+analysisData_raw <- collectVariables(dataTables)
+# Write the analysis data to a csv
+write_csv(x = analysisData_raw, file = "../2_pipeline/1_analysis_raw.csv")
+
+# Create analytic data set for analyis
+analysisWithMissing <- makeAnalysisDataWithMissing(analysisData_raw = analysisData_raw)
+# Write the analysis data set to a csv
+write_csv(x = analysisWithMissing, file = "../2_pipeline/2_analysisDataWithMissing.csv")
+```
+
+# Imputation and preparation of testing and training sets
+```{r, message = FALSE, warning = FALSE, results = 'hide'}
+set.seed(5678)
+imputedData <- getImputationDataSets(analysisWithMissing = analysisWithMissing)
+trainTest <- createTrainTest(analysisWithMissing = analysisWithMissing, imputedData = imputedData)
+
+```
+
+# Random forest
+## Model fitting
+```{r}
+
+rfObjs <- map(trainTest$trainingSets_list, rfHelper)
+
+rfPredictions <- map(rfObjs, predict, newdata = trainTest$testingData %>% 
+                       dplyr::select(-c(BCaseControlStatus, PtID)))
+
+rfImportance <- map(rfObjs, rfImportanceHelper)
+
+```
+
+## Model assessment
+
+```{r}
+map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+```
+
+
+# L1-Regularized logistic regression
+## Model fitting
+```{r}
+
+regLogisticRegObj <- map(trainTest$trainingSets_list, regLogisticReg_helper)  
+
+regLogisticRegPredictions <- map(regLogisticRegObj, predict, convertTestCategoricalToBinary(trainTest$testingData))
+
+regLogisticRegImportance <- map(regLogisticRegObj, varImp)
+
+```
+
+
+## Model assessment
+```{r}
+map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+```
+
+
+# SVM
+
+## Model fitting
+```{r}
+
+svmHelper <- function(trainingSet){
+  temp <- convertTrainingCategoricalToBinary(trainingSet)
+  e1071::svm(x = temp, y = as.factor(trainingSet$BCaseControlStatus))
+}
+
+svmObjs <- map(trainTest$trainingSets_list, svmHelper)
+
+svmPredictions <- map(svmObjs, predict, convertTestCategoricalToBinary(trainTest$testingData))
+
+# svmImportance <- map(svmObjs, varImp, scale = FALSE)
+```
+
+
+## Model assessment
+```{r}
+map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+```
+
+
