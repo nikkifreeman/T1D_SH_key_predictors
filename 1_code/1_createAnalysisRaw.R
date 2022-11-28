@@ -2,7 +2,6 @@
 # Author: Nikki Freeman
 # Created on: 28 August 2022
 # Last modified: 19 October 2022
-# Working directory is "Wash U practicum"
 
 # Packages
 library(tidyverse)

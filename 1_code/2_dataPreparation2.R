@@ -76,7 +76,7 @@ makeAnalysisDataWithMissing <- function(analysisData_raw){
   dplyr::select(-c(FreqHypoDamage, DangersHighBG, VisitDaysFromEnroll, BGVisit1NotDone,
                    T1DDiagAge, InsUnkown, DealHypoEp, UndertreatHypo, HighBGDamage,
                    nInsurance, BBGAttitudeScaleNotDone, BGVisit1NotDone, UnitsInsBasalOrLongActUnk,
-                   NumPumpBolusOrShortActUnk, bmi)) %>%
+                   NumPumpBolusOrShortActUnk, bmi, NumSHLastYr)) %>%
   # Filter out the observatiosn we have decided to exclude (for any reason)
   filter(str_detect(exclude, "No"))
 

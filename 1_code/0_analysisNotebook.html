@@ -2769,6 +2769,8 @@ in older adults with Type 1 Diabetes”. Function files are located in the
 same directory as this notebook.</p>
 <div id="packages-functions-and-data" class="section level1">
 <h1>Packages, functions, and data</h1>
+<p>The <code>getRawDataTables</code> function reads in the individual
+data tables from the raw data set.</p>
 <pre class="r"><code># Packages needed for the analysis
 library(tidyverse)
 library(mice)
@@ -2788,6 +2790,22 @@ dataTables &lt;- getRawDataTables(&quot;../&quot;)</code></pre>
 </div>
 <div id="data-cleaning-and-preparation" class="section level1">
 <h1>Data cleaning and preparation</h1>
+<p>The <code>collectVariables</code> function extracts from each data
+table, the variables of interest for the analysis. For some variables,
+minor data cleaning is completed, including</p>
+<ul>
+<li>Adding an inclusion/exclusion variable: two participants are
+excluded due to not having any demographic data available</li>
+<li>Adjudicating duplicate lab results: if one entry is NULL and the
+other is not, take the non-NULL entry; otherwise, average the
+entries.</li>
+<li>Scoring the diabetes numeracy test</li>
+<li>Scoring the geriatric depression test</li>
+<li>Identifying beta blockers from the medication list and creating a
+binary beta blocker variable</li>
+<li>Scoring the hypoglycemia unawareness survey</li>
+</ul>
+<p>The<code>makeAnalysisDataWithMissing</code></p>
 <pre class="r"><code># Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
 # Some variables are missing their scores or are re-coded
 analysisData_raw &lt;- collectVariables(dataTables)

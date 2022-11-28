@@ -12,6 +12,9 @@ output:
 This notebook contains the main steps in the analysis for "Identification of key risk factors associated with severe hypoglycemia in older adults with Type 1 Diabetes". Function files are located in the same directory as this notebook. 
 
 # Packages, functions, and data
+
+The `getRawDataTables` function reads in the individual data tables from the raw data set. 
+
 ```{r, message = FALSE, warning = FALSE, error = FALSE}
 # Packages needed for the analysis
 library(tidyverse)
@@ -32,6 +35,18 @@ dataTables <- getRawDataTables("../")
 ```
 
 # Data cleaning and preparation
+
+The `collectVariables` function extracts from each data table, the variables of interest for the analysis. For some variables, minor data cleaning is completed, including 
+
+  * Adding an inclusion/exclusion variable: two participants are excluded due to not having any demographic data available
+  * Adjudicating duplicate lab results: if one entry is NULL and the other is not, take the non-NULL entry; otherwise, average the entries.
+  * Scoring the diabetes numeracy test
+  * Scoring the geriatric depression test
+  * Identifying beta blockers from the medication list and creating a binary beta blocker variable
+  * Scoring the hypoglycemia unawareness survey
+  
+The`makeAnalysisDataWithMissing`
+
 ```{r}
 # Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
 # Some variables are missing their scores or are re-coded
@@ -69,7 +84,10 @@ rfImportance <- map(rfObjs, rfImportanceHelper)
 ## Model assessment
 
 ```{r}
-map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+rf_metrics <- map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+
+rf_plotMetrics <- data.frame(reduce(map(1:5, ~rf_metrics[[.]]$byClass), rbind)) %>%
+  mutate(Method = "RF")
 ```
 
 
@@ -88,7 +106,9 @@ regLogisticRegImportance <- map(regLogisticRegObj, varImp)
 
 ## Model assessment
 ```{r}
-map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+regLog_metrics <- map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+regLog_plotMetrics <- data.frame(reduce(map(1:5, ~regLog_metrics[[.]]$byClass), rbind)) %>%
+  mutate(Method = "LR")
 ```
 
 
@@ -112,7 +132,60 @@ svmPredictions <- map(svmObjs, predict, convertTestCategoricalToBinary(trainTest
 
 ## Model assessment
 ```{r}
-map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+svm_metrics <- map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+svm_plotMetrics <- data.frame(reduce(map(1:5, ~svm_metrics[[.]]$byClass), rbind)) %>%
+  mutate(Method = "SVM")
+```
+
+
+# Prediction performance plots
+```{r}
+predPerfDF <- bind_rows(rf_plotMetrics, regLog_plotMetrics, svm_plotMetrics) %>%
+  mutate(fold = rep(1:5, 3)) %>%
+  dplyr::select(Method, fold, Sensitivity, Specificity, Precision, Recall) %>% 
+  pivot_longer(cols = c(Sensitivity, Specificity, Precision, Recall), 
+               names_to = "metric", values_to = "value") %>%
+  replace_na(list(value = 0))
+
+predPerfPlot <- predPerfDF %>% 
+  ggplot(aes(x = Method, y = value, color = Method)) +
+  geom_point() +
+  facet_wrap(~metric) +
+  theme_minimal() +
+  labs(y = element_blank(), x = element_blank()) +
+  theme(legend.position = "bottom")
+
+ggsave(predPerfPlot, file = "../3_output/0_predPerfPlot.png", device = "png",
+       bg = "white", width = 12, height = 7, units = "in")
+```
+
+# Average predictive performance
+```{r}
+# Average of the predictive performance measures across folds
+predPerfDF %>%
+  group_by(Method, metric) %>%
+  summarise(mean = round(mean(value), 2),
+            sd = round(sd(value), 2)) %>%
+  arrange(metric)
+
+# Average accuracy, etc across folds
+round(colMeans(reduce(map(rf_metrics, ~pluck(., "overall")), rbind)), 2)
+
+round(colMeans(reduce(map(regLog_metrics, ~pluck(., "overall")), rbind)), 2)
+
+round(colMeans(reduce(map(svm_metrics, ~pluck(., "overall")), rbind)), 2)
+```
+
+
+# Variable importance
+
+```{r}
+data.frame(reduce(map2(1:5,rfImportance, function(x, y) y %>% mutate(fold = x)), rbind)) %>%
+  arrange(fold, desc(MeanDecreaseGini)) %>%
+  group_by(fold) %>%
+  slice_max(MeanDecreaseGini, n = 5)
+
+regLogisticRegImportance
 ```
 
 

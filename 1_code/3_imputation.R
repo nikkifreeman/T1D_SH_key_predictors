@@ -1,8 +1,7 @@
 # Function to create the imputation data sets
 getImputationDataSets <- function(analysisWithMissing){
   analysisWithMissing <- analysisWithMissing %>%
-    mutate(NumSHLastYr = as.factor(NumSHLastYr),
-           hypoUnaware = as.factor(hypoUnaware),
+    mutate(hypoUnaware = as.factor(hypoUnaware),
            educationCat = as.factor(educationCat),
            bmiCat = as.factor(bmiCat),
            insDoseCat = as.factor(insDoseCat)) %>%
@@ -21,8 +20,7 @@ trainingSetListHelper <- function(df, k){
 createTrainTest <- function(analysisWithMissing, imputedData){
   # Make factors as needed
   analysisWithMissing <- analysisWithMissing %>%
-    mutate(NumSHLastYr = as.factor(NumSHLastYr),
-           hypoUnaware = as.factor(hypoUnaware),
+    mutate(hypoUnaware = as.factor(hypoUnaware),
            educationCat = as.factor(educationCat),
            bmiCat = as.factor(bmiCat),
            insDoseCat = as.factor(insDoseCat)) %>%
