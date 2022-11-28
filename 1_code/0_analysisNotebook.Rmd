@@ -22,6 +22,8 @@ library(mice)
 library(caret)
 library(randomForest)
 library(glmnet)
+library(xtable)
+library(table1)
 
 # Functions
 source("1_createAnalysisRaw.R")
@@ -45,7 +47,13 @@ The `collectVariables` function extracts from each data table, the variables of 
   * Identifying beta blockers from the medication list and creating a binary beta blocker variable
   * Scoring the hypoglycemia unawareness survey
   
-The`makeAnalysisDataWithMissing`
+The`makeAnalysisDataWithMissing` does additional data cleaning and perparation to yield a dataframe with all of the observed data that will be used for the analysis. The cleaning steps include: 
+  
+  * Re-coding education into categories (highest educational attainment <= HS, Some college or college degree, or advanced degree)
+  * Re-coding insurance into a binary variable for having insurance (public, private, single service) or not
+  * Calculating BMI and categorizing into BMI classes (BMI < 18.5 as underweight, 18.5 $\le$ BMI < 25 as normal weight, 15 $\le$ BMI < 30 as overweight, and BMI $\ge$ 30 as obese)
+  * Re-coding total insulin units as <40, $\ge$ 40 and <60, and $\ge$ 60
+  * Averaging the two frailty walk scores to  yield a single frailty walk score for each individual
 
 ```{r}
 # Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
@@ -61,6 +69,9 @@ write_csv(x = analysisWithMissing, file = "../2_pipeline/2_analysisDataWithMissi
 ```
 
 # Imputation and preparation of testing and training sets
+
+The `getImputationDataSets` function takes the observed data for analysis and creates 5 imputed dated sets. The full observed data set for imputation. The `createTrainTest` function takes the imputed dated and observed data to generate a test set composed of only complete cases and 5 imputation sets that are used for training the models (effectively, these are folds).
+
 ```{r, message = FALSE, warning = FALSE, results = 'hide'}
 set.seed(5678)
 imputedData <- getImputationDataSets(analysisWithMissing = analysisWithMissing)
@@ -70,6 +81,9 @@ trainTest <- createTrainTest(analysisWithMissing = analysisWithMissing, imputedD
 
 # Random forest
 ## Model fitting
+
+This code chunk fits a RF to the training sets, generates predictions for the testing set, and extracts the variable importance for the trained models.
+
 ```{r}
 
 rfObjs <- map(trainTest$trainingSets_list, rfHelper)
@@ -83,6 +97,8 @@ rfImportance <- map(rfObjs, rfImportanceHelper)
 
 ## Model assessment
 
+This chunk grabs the prediction metrics for the RF model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot.
+
 ```{r}
 rf_metrics <- map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
 
@@ -93,6 +109,9 @@ rf_plotMetrics <- data.frame(reduce(map(1:5, ~rf_metrics[[.]]$byClass), rbind)) 
 
 # L1-Regularized logistic regression
 ## Model fitting
+
+This code chunk fits a LR model to the training sets, generates predictions for the testing set, and extracts the variable importance for the trained models.
+
 ```{r}
 
 regLogisticRegObj <- map(trainTest$trainingSets_list, regLogisticReg_helper)  
@@ -105,6 +124,9 @@ regLogisticRegImportance <- map(regLogisticRegObj, varImp)
 
 
 ## Model assessment
+
+This chunk grabs the prediction metrics for the LR model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot.
+
 ```{r}
 regLog_metrics <- map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
 regLog_plotMetrics <- data.frame(reduce(map(1:5, ~regLog_metrics[[.]]$byClass), rbind)) %>%
@@ -115,22 +137,28 @@ regLog_plotMetrics <- data.frame(reduce(map(1:5, ~regLog_metrics[[.]]$byClass), 
 # SVM
 
 ## Model fitting
+
+This code chunk fits a SVM model to the training sets and generates predictions for the testing set.
+
 ```{r}
 
 svmHelper <- function(trainingSet){
-  temp <- convertTrainingCategoricalToBinary(trainingSet)
+  temp <- convertTrainingCategoricalToBinary(trainingSet) %>%
+    select(-race_asian)
   e1071::svm(x = temp, y = as.factor(trainingSet$BCaseControlStatus))
 }
 
 svmObjs <- map(trainTest$trainingSets_list, svmHelper)
 
-svmPredictions <- map(svmObjs, predict, convertTestCategoricalToBinary(trainTest$testingData))
+svmPredictions <- map(svmObjs, predict, convertTestCategoricalToBinary_svm(trainTest$testingData))
 
-# svmImportance <- map(svmObjs, varImp, scale = FALSE)
 ```
 
 
 ## Model assessment
+
+This chunk grabs the prediction metrics for the LR model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot.
+
 ```{r}
 svm_metrics <- map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
 svm_plotMetrics <- data.frame(reduce(map(1:5, ~svm_metrics[[.]]$byClass), rbind)) %>%
@@ -139,6 +167,9 @@ svm_plotMetrics <- data.frame(reduce(map(1:5, ~svm_metrics[[.]]$byClass), rbind)
 
 
 # Prediction performance plots
+
+This chunk generates the predictive performance plots. 
+
 ```{r}
 predPerfDF <- bind_rows(rf_plotMetrics, regLog_plotMetrics, svm_plotMetrics) %>%
   mutate(fold = rep(1:5, 3)) %>%
@@ -188,4 +219,73 @@ data.frame(reduce(map2(1:5,rfImportance, function(x, y) y %>% mutate(fold = x)),
 regLogisticRegImportance
 ```
 
+# Descriptives table 
+
+```{r}
+table1df <- analysisWithMissing %>%
+  filter(str_detect(exclude, "No")) %>%
+  mutate(Gender = factor(Gender, levels = c("F", "M"), labels = c("Female", "Male")),
+         Race = factor(Race, 
+                       levels = c("White", "Asian", "Unknown/not reported", 
+                                  "Black/African American", 
+                                  "American Indian/Alaskan Native"),
+                       labels = c("White", "Asian", "Unknown/not reported", 
+                                  "Black/African American", 
+                                  "American Indian/Alaskan Native")),
+         Ethnicity = factor(Ethnicity),
+         `Exercise (days per week)` = DaysWkEx, 
+         `Lives alone` = LiveAlone,
+         `Insulin delivery method` = InsDeliveryMethod,
+         `Units Insulin (bolus or long acting)` = UnitsInsBasalOrLongAct,
+         `Number boluses or injections short acting per day` = NumPumpBolusOrShortAct,
+         `Days hospitalized DKA` = NumHospDKA,
+         HBA1C = as.numeric(HBA1C),
+         `Beta blocker use` = factor(betaBlocker, levels = c(1, 0), labels = c("Yes", "no")),
+         `Symbolic Digits Written test` = SymbDigWTotCorr,
+         `Symbolic Digits Oral test` = SymbDigOTotCorr,
+         `Trail Making test` = TrailMakATotTime,
+         `Grooved Peg Board test (dominant hand)` = GrPegDomTotTime,
+         `Functional Activity score` = FuncActTotTestScore,
+         `Duke Social Support scale` = DukeSocTotDSSI,
+         `Geriatric Depression score` = geriDepressionScore,
+         `Hypoglycemia unawareness` = factor(hypoUnaware, levels = c("hypo aware", "reduced awareness", "unaware"),
+                                             labels = c("Aware", "Reduced awareness", "Unaware")),
+         `Diabetes Numeracy score` = diabNumeracyScore,
+         `Montreal Cognitive Assessment score` = MoCATotal,
+         `Education` = factor(educationCat, levels = c("HS", "College", "Advanced degree"),
+                              labels = c("<= HS", "Any college", "Advanced degree")),
+         `Any insurance` = factor(anyInsurance, levels = c(0, 1),
+                                  labels = c("No", "Yes")),
+         `Alcohol use (days per month)` = DaysMoDrinkAlc,
+         `Insulin dose` = factor(insDoseCat, levels = c("less40", "40to60", "greater60"),
+                                 labels = c("<40", "40-60", ">60")),
+         `Detectable C-peptide` = factor(detectableCPEP, levels = c(0, 1),
+                                         labels = c("<0.017", ">=0.017")),
+         `Abnormal creatinine` = factor(abnormalCreatinine, levels = c(0, 1),
+                                        labels = c("<=1.1 females/<=1.2 males", ">1.1 females/>1.2 males")),
+         `Average frailty walk time` = frailty,
+         `BMI category` = factor(bmiCat, levels = c("underweight", "normal", "overweight", "obese"),
+                                 labels = c("Underweight", "Normal weight", "Overweight", "Obese"))) 
+
+table1_out <- table1(~ Gender + Race + Ethnicity + 
+         `Education` + `Any insurance` + `BMI category` +
+         `Exercise (days per week)` +
+         `Lives alone` + `Alcohol use (days per month)` +
+         `Insulin delivery method` + `Insulin dose` +
+         `Number boluses or injections short acting per day` +
+         `Days hospitalized DKA` + HBA1C + `Detectable C-peptide` + 
+         `Abnormal creatinine` + `Beta blocker use` +
+         `Symbolic Digits Written test` + `Symbolic Digits Oral test` +
+         `Trail Making test` + `Grooved Peg Board test (dominant hand)` +
+         `Functional Activity score` + `Duke Social Support scale` +
+         `Geriatric Depression score` + `Hypoglycemia unawareness` +
+         `Diabetes Numeracy score` + `Montreal Cognitive Assessment score` +
+         `Average frailty walk time`
+         | BCaseControlStatus, data = table1df)
+# Knitted table
+table1_out
+
+# Create the latex table
+print(xtable(as.data.frame(table1_out)), include.rownames = FALSE)
+```
 

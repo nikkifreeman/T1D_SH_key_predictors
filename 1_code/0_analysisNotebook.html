@@ -2572,6 +2572,101 @@ window.onload = function() {
   PagedTableDoc.initAll();
 };
 </script>
+<style type="text/css">
+.Rtable1 table, table.Rtable1 {
+font-family: "Arial", Arial, sans-serif;
+font-size: 10pt;
+border-collapse: collapse;
+padding: 0px;
+margin: 0px;
+
+}
+.Rtable1 td {
+white-space:nowrap;
+}
+.Rtable1 th, .Rtable1 td {
+border: 0;
+text-align: center;
+padding: 0.5ex 1.5ex;
+margin: 0px;
+}
+.Rtable1 thead>tr:first-child>th {
+border-top: 2pt solid black;
+}
+.Rtable1 thead>tr:last-child>th {
+border-bottom: 1pt solid black;
+}
+.Rtable1 tbody>tr:last-child>td {
+border-bottom: 2pt solid black;
+}
+.Rtable1 th.grouplabel {
+padding-left: 0;
+padding-right: 0;
+}
+.Rtable1 th.grouplabel>div {
+margin-left: 1.5ex;
+margin-right: 1.5ex;
+border-bottom: 1pt solid black;
+}
+.Rtable1 th.grouplabel:last-child>div {
+margin-right: 0;
+}
+.Rtable1 .rowlabel {
+text-align: left;
+padding-left: 2.5ex;
+}
+.Rtable1 .firstrow.rowlabel {
+padding-left: 0.5ex;
+font-weight: bold;
+}
+
+.Rtable1-zebra tbody tr:nth-child(odd) {
+background-color: #eee;
+}
+
+table.Rtable1-times {
+font-family: "Times New Roman", Times, serif;
+}
+
+.Rtable1-shade th {
+background-color: #ccc;
+}
+
+.Rtable1-grid th, .Rtable1-grid td {
+border-left: 1pt solid black;
+border-right: 1pt solid black;
+}
+.Rtable1-grid thead>tr:first-child>th {
+border-top: 1pt solid black;
+}
+.Rtable1-grid thead>tr:last-child>th {
+border-bottom: 1pt solid black;
+}
+.Rtable1-grid tbody>tr:last-child>td {
+border-bottom: 1pt solid black;
+}
+.Rtable1-grid .firstrow, .Rtable1-grid .firstrow ~ td {
+border-top: 1pt solid black;
+}
+.Rtable1-grid th.grouplabel>div {
+margin-left: 0;
+margin-right: 0;
+border-bottom: 0;
+}
+
+.Rtable1-center td.rowlabel, .Rtable1-center td.firstrow.rowlabel {
+font-weight: bold;
+text-align: center;
+padding: 0.5ex 1.5ex;
+}
+
+.Rtable1 .Rtable1-footnote {
+font-size: smaller;
+padding: 0px;
+margin: 0px;
+text-align: left;
+}
+</style>
 
 <style type="text/css">
 code{white-space: pre-wrap;}
@@ -2777,6 +2872,8 @@ library(mice)
 library(caret)
 library(randomForest)
 library(glmnet)
+library(xtable)
+library(table1)
 
 # Functions
 source(&quot;1_createAnalysisRaw.R&quot;)
@@ -2805,7 +2902,23 @@ entries.</li>
 binary beta blocker variable</li>
 <li>Scoring the hypoglycemia unawareness survey</li>
 </ul>
-<p>The<code>makeAnalysisDataWithMissing</code></p>
+<p>The<code>makeAnalysisDataWithMissing</code> does additional data
+cleaning and perparation to yield a dataframe with all of the observed
+data that will be used for the analysis. The cleaning steps include:</p>
+<ul>
+<li>Re-coding education into categories (highest educational attainment
+&lt;= HS, Some college or college degree, or advanced degree)</li>
+<li>Re-coding insurance into a binary variable for having insurance
+(public, private, single service) or not</li>
+<li>Calculating BMI and categorizing into BMI classes (BMI &lt; 18.5 as
+underweight, 18.5 <span class="math inline">\(\le\)</span> BMI &lt; 25
+as normal weight, 15 <span class="math inline">\(\le\)</span> BMI &lt;
+30 as overweight, and BMI <span class="math inline">\(\ge\)</span> 30 as
+obese)</li>
+<li>Re-coding total insulin units as &lt;40, <span class="math inline">\(\ge\)</span> 40 and &lt;60, and <span class="math inline">\(\ge\)</span> 60</li>
+<li>Averaging the two frailty walk scores to yield a single frailty walk
+score for each individual</li>
+</ul>
 <pre class="r"><code># Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
 # Some variables are missing their scores or are re-coded
 analysisData_raw &lt;- collectVariables(dataTables)
@@ -2819,6 +2932,12 @@ write_csv(x = analysisWithMissing, file = &quot;../2_pipeline/2_analysisDataWith
 </div>
 <div id="imputation-and-preparation-of-testing-and-training-sets" class="section level1">
 <h1>Imputation and preparation of testing and training sets</h1>
+<p>The <code>getImputationDataSets</code> function takes the observed
+data for analysis and creates 5 imputed dated sets. The full observed
+data set for imputation. The <code>createTrainTest</code> function takes
+the imputed dated and observed data to generate a test set composed of
+only complete cases and 5 imputation sets that are used for training the
+models (effectively, these are folds).</p>
 <pre class="r"><code>set.seed(5678)
 imputedData &lt;- getImputationDataSets(analysisWithMissing = analysisWithMissing)
 trainTest &lt;- createTrainTest(analysisWithMissing = analysisWithMissing, imputedData = imputedData)</code></pre>
@@ -2827,6 +2946,9 @@ trainTest &lt;- createTrainTest(analysisWithMissing = analysisWithMissing, imput
 <h1>Random forest</h1>
 <div id="model-fitting" class="section level2">
 <h2>Model fitting</h2>
+<p>This code chunk fits a RF to the training sets, generates predictions
+for the testing set, and extracts the variable importance for the
+trained models.</p>
 <pre class="r"><code>rfObjs &lt;- map(trainTest$trainingSets_list, rfHelper)
 
 rfPredictions &lt;- map(rfObjs, predict, newdata = trainTest$testingData %&gt;% 
@@ -2836,157 +2958,22 @@ rfImportance &lt;- map(rfObjs, rfImportanceHelper)</code></pre>
 </div>
 <div id="model-assessment" class="section level2">
 <h2>Model assessment</h2>
-<pre class="r"><code>map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))</code></pre>
-<pre><code>## [[1]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[2]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[3]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  2
-##          1  0 23
-##                                           
-##                Accuracy : 0.9524          
-##                  95% CI : (0.8384, 0.9942)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.473e-07       
-##                                           
-##                   Kappa : 0.903           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 0.4795          
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9200          
-##          Pos Pred Value : 0.8947          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4524          
-##       Balanced Accuracy : 0.9600          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[4]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[5]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-## </code></pre>
+<p>This chunk grabs the prediction metrics for the RF model and creates
+a dataframe of the prediction metrics that will be used for the
+prediction performance plot.</p>
+<pre class="r"><code>rf_metrics &lt;- map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+
+rf_plotMetrics &lt;- data.frame(reduce(map(1:5, ~rf_metrics[[.]]$byClass), rbind)) %&gt;%
+  mutate(Method = &quot;RF&quot;)</code></pre>
 </div>
 </div>
 <div id="l1-regularized-logistic-regression" class="section level1">
 <h1>L1-Regularized logistic regression</h1>
 <div id="model-fitting-1" class="section level2">
 <h2>Model fitting</h2>
+<p>This code chunk fits a LR model to the training sets, generates
+predictions for the testing set, and extracts the variable importance
+for the trained models.</p>
 <pre class="r"><code>regLogisticRegObj &lt;- map(trainTest$trainingSets_list, regLogisticReg_helper)  
 
 regLogisticRegPredictions &lt;- map(regLogisticRegObj, predict, convertTestCategoricalToBinary(trainTest$testingData))
@@ -2995,316 +2982,1122 @@ regLogisticRegImportance &lt;- map(regLogisticRegObj, varImp)</code></pre>
 </div>
 <div id="model-assessment-1" class="section level2">
 <h2>Model assessment</h2>
-<pre class="r"><code>map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))</code></pre>
-<pre><code>## [[1]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  3
-##          1  0 22
-##                                          
-##                Accuracy : 0.9286         
-##                  95% CI : (0.8052, 0.985)
-##     No Information Rate : 0.5952         
-##     P-Value [Acc &gt; NIR] : 1.39e-06       
-##                                          
-##                   Kappa : 0.8558         
-##                                          
-##  Mcnemar&#39;s Test P-Value : 0.2482         
-##                                          
-##             Sensitivity : 1.0000         
-##             Specificity : 0.8800         
-##          Pos Pred Value : 0.8500         
-##          Neg Pred Value : 1.0000         
-##              Prevalence : 0.4048         
-##          Detection Rate : 0.4048         
-##    Detection Prevalence : 0.4762         
-##       Balanced Accuracy : 0.9400         
-##                                          
-##        &#39;Positive&#39; Class : 0              
-##                                          
-## 
-## [[2]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  2
-##          1  0 23
-##                                           
-##                Accuracy : 0.9524          
-##                  95% CI : (0.8384, 0.9942)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.473e-07       
-##                                           
-##                   Kappa : 0.903           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 0.4795          
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9200          
-##          Pos Pred Value : 0.8947          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4524          
-##       Balanced Accuracy : 0.9600          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[3]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  4
-##          1  0 21
-##                                           
-##                Accuracy : 0.9048          
-##                  95% CI : (0.7738, 0.9734)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 9.632e-06       
-##                                           
-##                   Kappa : 0.8095          
-##                                           
-##  Mcnemar&#39;s Test P-Value : 0.1336          
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.8400          
-##          Pos Pred Value : 0.8095          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.5000          
-##       Balanced Accuracy : 0.9200          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[4]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  2
-##          1  0 23
-##                                           
-##                Accuracy : 0.9524          
-##                  95% CI : (0.8384, 0.9942)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.473e-07       
-##                                           
-##                   Kappa : 0.903           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 0.4795          
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9200          
-##          Pos Pred Value : 0.8947          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4524          
-##       Balanced Accuracy : 0.9600          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
-## 
-## [[5]]
-## Confusion Matrix and Statistics
-## 
-##           Reference
-## Prediction  0  1
-##          0 17  3
-##          1  0 22
-##                                          
-##                Accuracy : 0.9286         
-##                  95% CI : (0.8052, 0.985)
-##     No Information Rate : 0.5952         
-##     P-Value [Acc &gt; NIR] : 1.39e-06       
-##                                          
-##                   Kappa : 0.8558         
-##                                          
-##  Mcnemar&#39;s Test P-Value : 0.2482         
-##                                          
-##             Sensitivity : 1.0000         
-##             Specificity : 0.8800         
-##          Pos Pred Value : 0.8500         
-##          Neg Pred Value : 1.0000         
-##              Prevalence : 0.4048         
-##          Detection Rate : 0.4048         
-##    Detection Prevalence : 0.4762         
-##       Balanced Accuracy : 0.9400         
-##                                          
-##        &#39;Positive&#39; Class : 0              
-## </code></pre>
+<p>This chunk grabs the prediction metrics for the LR model and creates
+a dataframe of the prediction metrics that will be used for the
+prediction performance plot.</p>
+<pre class="r"><code>regLog_metrics &lt;- map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+regLog_plotMetrics &lt;- data.frame(reduce(map(1:5, ~regLog_metrics[[.]]$byClass), rbind)) %&gt;%
+  mutate(Method = &quot;LR&quot;)</code></pre>
 </div>
 </div>
 <div id="svm" class="section level1">
 <h1>SVM</h1>
 <div id="model-fitting-2" class="section level2">
 <h2>Model fitting</h2>
+<p>This code chunk fits a SVM model to the training sets and generates
+predictions for the testing set.</p>
 <pre class="r"><code>svmHelper &lt;- function(trainingSet){
-  temp &lt;- convertTrainingCategoricalToBinary(trainingSet)
+  temp &lt;- convertTrainingCategoricalToBinary(trainingSet) %&gt;%
+    select(-race_asian)
   e1071::svm(x = temp, y = as.factor(trainingSet$BCaseControlStatus))
 }
 
 svmObjs &lt;- map(trainTest$trainingSets_list, svmHelper)
 
-svmPredictions &lt;- map(svmObjs, predict, convertTestCategoricalToBinary(trainTest$testingData))
-
-# svmImportance &lt;- map(svmObjs, varImp, scale = FALSE)</code></pre>
+svmPredictions &lt;- map(svmObjs, predict, convertTestCategoricalToBinary_svm(trainTest$testingData))</code></pre>
 </div>
 <div id="model-assessment-2" class="section level2">
 <h2>Model assessment</h2>
-<pre class="r"><code>map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))</code></pre>
+<p>This chunk grabs the prediction metrics for the LR model and creates
+a dataframe of the prediction metrics that will be used for the
+prediction performance plot.</p>
+<pre class="r"><code>svm_metrics &lt;- map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus))
+svm_plotMetrics &lt;- data.frame(reduce(map(1:5, ~svm_metrics[[.]]$byClass), rbind)) %&gt;%
+  mutate(Method = &quot;SVM&quot;)</code></pre>
+</div>
+</div>
+<div id="prediction-performance-plots" class="section level1">
+<h1>Prediction performance plots</h1>
+<p>This chunk generates the predictive performance plots.</p>
+<pre class="r"><code>predPerfDF &lt;- bind_rows(rf_plotMetrics, regLog_plotMetrics, svm_plotMetrics) %&gt;%
+  mutate(fold = rep(1:5, 3)) %&gt;%
+  dplyr::select(Method, fold, Sensitivity, Specificity, Precision, Recall) %&gt;% 
+  pivot_longer(cols = c(Sensitivity, Specificity, Precision, Recall), 
+               names_to = &quot;metric&quot;, values_to = &quot;value&quot;) %&gt;%
+  replace_na(list(value = 0))
+
+predPerfPlot &lt;- predPerfDF %&gt;% 
+  ggplot(aes(x = Method, y = value, color = Method)) +
+  geom_point() +
+  facet_wrap(~metric) +
+  theme_minimal() +
+  labs(y = element_blank(), x = element_blank()) +
+  theme(legend.position = &quot;bottom&quot;)
+
+ggsave(predPerfPlot, file = &quot;../3_output/0_predPerfPlot.png&quot;, device = &quot;png&quot;,
+       bg = &quot;white&quot;, width = 12, height = 7, units = &quot;in&quot;)</code></pre>
+</div>
+<div id="average-predictive-performance" class="section level1">
+<h1>Average predictive performance</h1>
+<pre class="r"><code># Average of the predictive performance measures across folds
+predPerfDF %&gt;%
+  group_by(Method, metric) %&gt;%
+  summarise(mean = round(mean(value), 2),
+            sd = round(sd(value), 2)) %&gt;%
+  arrange(metric)</code></pre>
+<pre><code>## `summarise()` has grouped output by &#39;Method&#39;. You can override using the
+## `.groups` argument.</code></pre>
+<div data-pagedtable="false">
+<script data-pagedtable-source type="application/json">
+{"columns":[{"label":["Method"],"name":[1],"type":["chr"],"align":["left"]},{"label":["metric"],"name":[2],"type":["chr"],"align":["left"]},{"label":["mean"],"name":[3],"type":["dbl"],"align":["right"]},{"label":["sd"],"name":[4],"type":["dbl"],"align":["right"]}],"data":[{"1":"LR","2":"Precision","3":"0.84","4":"0.01"},{"1":"RF","2":"Precision","3":"0.84","4":"0.03"},{"1":"SVM","2":"Precision","3":"0.81","4":"0.02"},{"1":"LR","2":"Recall","3":"0.77","4":"0.03"},{"1":"RF","2":"Recall","3":"0.71","4":"0.04"},{"1":"SVM","2":"Recall","3":"0.76","4":"0.02"},{"1":"LR","2":"Sensitivity","3":"0.77","4":"0.03"},{"1":"RF","2":"Sensitivity","3":"0.71","4":"0.04"},{"1":"SVM","2":"Sensitivity","3":"0.76","4":"0.02"},{"1":"LR","2":"Specificity","3":"0.76","4":"0.03"},{"1":"RF","2":"Specificity","3":"0.78","4":"0.04"},{"1":"SVM","2":"Specificity","3":"0.69","4":"0.04"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+  </script>
+</div>
+<pre class="r"><code># Average accuracy, etc across folds
+round(colMeans(reduce(map(rf_metrics, ~pluck(., &quot;overall&quot;)), rbind)), 2)</code></pre>
+<pre><code>##       Accuracy          Kappa  AccuracyLower  AccuracyUpper   AccuracyNull 
+##           0.73           0.46           0.59           0.85           0.63 
+## AccuracyPValue  McnemarPValue 
+##           0.09           0.28</code></pre>
+<pre class="r"><code>round(colMeans(reduce(map(regLog_metrics, ~pluck(., &quot;overall&quot;)), rbind)), 2)</code></pre>
+<pre><code>##       Accuracy          Kappa  AccuracyLower  AccuracyUpper   AccuracyNull 
+##           0.76           0.51           0.63           0.87           0.63 
+## AccuracyPValue  McnemarPValue 
+##           0.03           0.62</code></pre>
+<pre class="r"><code>round(colMeans(reduce(map(svm_metrics, ~pluck(., &quot;overall&quot;)), rbind)), 2)</code></pre>
+<pre><code>##       Accuracy          Kappa  AccuracyLower  AccuracyUpper   AccuracyNull 
+##           0.74           0.45           0.60           0.85           0.63 
+## AccuracyPValue  McnemarPValue 
+##           0.08           0.83</code></pre>
+</div>
+<div id="variable-importance" class="section level1">
+<h1>Variable importance</h1>
+<pre class="r"><code>data.frame(reduce(map2(1:5,rfImportance, function(x, y) y %&gt;% mutate(fold = x)), rbind)) %&gt;%
+  arrange(fold, desc(MeanDecreaseGini)) %&gt;%
+  group_by(fold) %&gt;%
+  slice_max(MeanDecreaseGini, n = 5)</code></pre>
+<div data-pagedtable="false">
+<script data-pagedtable-source type="application/json">
+{"columns":[{"label":["predictor"],"name":[1],"type":["chr"],"align":["left"]},{"label":["MeanDecreaseGini"],"name":[2],"type":["dbl"],"align":["right"]},{"label":["fold"],"name":[3],"type":["int"],"align":["right"]}],"data":[{"1":"hypoUnaware","2":"10.371026","3":"1"},{"1":"SymbDigWTotCorr","2":"5.522245","3":"1"},{"1":"GrPegDomTotTime","2":"4.946612","3":"1"},{"1":"TrailMakATotTime","2":"4.929419","3":"1"},{"1":"HBA1C","2":"4.885277","3":"1"},{"1":"hypoUnaware","2":"10.192876","3":"2"},{"1":"SymbDigWTotCorr","2":"5.600815","3":"2"},{"1":"HBA1C","2":"5.248391","3":"2"},{"1":"TrailMakATotTime","2":"4.814968","3":"2"},{"1":"UnitsInsBasalOrLongAct","2":"4.529488","3":"2"},{"1":"hypoUnaware","2":"10.732889","3":"3"},{"1":"SymbDigWTotCorr","2":"5.221852","3":"3"},{"1":"TrailMakATotTime","2":"4.947973","3":"3"},{"1":"HBA1C","2":"4.834557","3":"3"},{"1":"GrPegDomTotTime","2":"4.795632","3":"3"},{"1":"hypoUnaware","2":"10.955676","3":"4"},{"1":"SymbDigWTotCorr","2":"5.643319","3":"4"},{"1":"HBA1C","2":"5.027968","3":"4"},{"1":"GrPegDomTotTime","2":"4.666749","3":"4"},{"1":"TrailMakATotTime","2":"4.648507","3":"4"},{"1":"hypoUnaware","2":"10.782402","3":"5"},{"1":"SymbDigWTotCorr","2":"6.106380","3":"5"},{"1":"TrailMakATotTime","2":"4.905468","3":"5"},{"1":"GrPegDomTotTime","2":"4.715156","3":"5"},{"1":"UnitsInsBasalOrLongAct","2":"4.647728","3":"5"}],"options":{"columns":{"min":{},"max":[10]},"rows":{"min":[10],"max":[10]},"pages":{}}}
+  </script>
+</div>
+<pre class="r"><code>regLogisticRegImportance</code></pre>
 <pre><code>## [[1]]
-## Confusion Matrix and Statistics
+## glmnet variable importance
 ## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
+##   only 20 most important variables shown (out of 36)
+## 
+##                       Overall
+## hypo_unaware          100.000
+## underweight            65.572
+## hypo_reducedAwareness  59.214
+## hispanic               57.731
+## betaBlocker            37.501
+## race_white             32.000
+## race_black             31.948
+## insDose_greater60      28.951
+## abnormalCreatinine     23.051
+## NumHospDKA             22.718
+## Gender                 18.989
+## obese                  13.869
+## frailty                11.846
+## anyInsurance            9.245
+## geriDepressionScore     7.614
+## insDose_40to60          6.036
+## InsDeliveryMethod       4.974
+## LiveAlone               4.402
+## detectableCPEP          2.572
+## DukeSocTotDSSI          2.230
 ## 
 ## [[2]]
-## Confusion Matrix and Statistics
+## glmnet variable importance
 ## 
-##           Reference
-## Prediction  0  1
-##          0 17  1
-##          1  0 24
-##                                           
-##                Accuracy : 0.9762          
-##                  95% CI : (0.8743, 0.9994)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 1.018e-08       
-##                                           
-##                   Kappa : 0.951           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 1               
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.9600          
-##          Pos Pred Value : 0.9444          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.4286          
-##       Balanced Accuracy : 0.9800          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
+##   only 20 most important variables shown (out of 36)
+## 
+##                         Overall
+## hypo_reducedAwareness  100.0000
+## hypo_unaware            78.1186
+## underweight             77.4397
+## betaBlocker             48.3205
+## hispanic                45.8947
+## race_white              31.3457
+## insDose_greater60       31.2758
+## race_black              30.9369
+## abnormalCreatinine      19.2029
+## Gender                  15.5030
+## NumHospDKA              10.7548
+## frailty                 10.3822
+## obese                    7.7181
+## geriDepressionScore      5.7624
+## overweight               2.7395
+## DukeSocTotDSSI           1.5252
+## SymbDigWTotCorr          0.7164
+## FuncActTotTestScore      0.5452
+## DaysMoDrinkAlc           0.3142
+## UnitsInsBasalOrLongAct   0.1885
 ## 
 ## [[3]]
-## Confusion Matrix and Statistics
+## glmnet variable importance
 ## 
-##           Reference
-## Prediction  0  1
-##          0 17  5
-##          1  0 20
-##                                           
-##                Accuracy : 0.881           
-##                  95% CI : (0.7437, 0.9602)
-##     No Information Rate : 0.5952          
-##     P-Value [Acc &gt; NIR] : 5.222e-05       
-##                                           
-##                   Kappa : 0.764           
-##                                           
-##  Mcnemar&#39;s Test P-Value : 0.07364         
-##                                           
-##             Sensitivity : 1.0000          
-##             Specificity : 0.8000          
-##          Pos Pred Value : 0.7727          
-##          Neg Pred Value : 1.0000          
-##              Prevalence : 0.4048          
-##          Detection Rate : 0.4048          
-##    Detection Prevalence : 0.5238          
-##       Balanced Accuracy : 0.9000          
-##                                           
-##        &#39;Positive&#39; Class : 0               
-##                                           
+##   only 20 most important variables shown (out of 36)
+## 
+##                          Overall
+## hypo_unaware           100.00000
+## hypo_reducedAwareness   75.84644
+## underweight             50.37806
+## hispanic                32.61538
+## betaBlocker             31.33597
+## race_white              23.07805
+## race_black              22.69950
+## insDose_greater60       16.67518
+## abnormalCreatinine      11.12369
+## frailty                  9.38716
+## Gender                   5.15552
+## geriDepressionScore      4.09817
+## obese                    3.95228
+## NumHospDKA               2.32402
+## insDose_40to60           1.92543
+## FuncActTotTestScore      0.60271
+## DukeSocTotDSSI           0.42590
+## SymbDigWTotCorr          0.40508
+## DaysMoDrinkAlc           0.11328
+## UnitsInsBasalOrLongAct   0.02614
 ## 
 ## [[4]]
-## Confusion Matrix and Statistics
+## glmnet variable importance
 ## 
-##           Reference
-## Prediction  0  1
-##          0 17  0
-##          1  0 25
-##                                      
-##                Accuracy : 1          
-##                  95% CI : (0.9159, 1)
-##     No Information Rate : 0.5952     
-##     P-Value [Acc &gt; NIR] : 3.444e-10  
-##                                      
-##                   Kappa : 1          
-##                                      
-##  Mcnemar&#39;s Test P-Value : NA         
-##                                      
-##             Sensitivity : 1.0000     
-##             Specificity : 1.0000     
-##          Pos Pred Value : 1.0000     
-##          Neg Pred Value : 1.0000     
-##              Prevalence : 0.4048     
-##          Detection Rate : 0.4048     
-##    Detection Prevalence : 0.4048     
-##       Balanced Accuracy : 1.0000     
-##                                      
-##        &#39;Positive&#39; Class : 0          
-##                                      
+##   only 20 most important variables shown (out of 36)
+## 
+##                       Overall
+## hypo_unaware          100.000
+## hypo_reducedAwareness  64.584
+## hispanic               54.206
+## underweight            52.685
+## betaBlocker            38.544
+## insDose_greater60      35.553
+## race_white             32.584
+## race_black             32.540
+## abnormalCreatinine     25.145
+## NumHospDKA             22.985
+## Gender                 20.589
+## obese                  14.563
+## frailty                11.714
+## anyInsurance            9.935
+## geriDepressionScore     7.592
+## InsDeliveryMethod       4.830
+## LiveAlone               4.438
+## insDose_40to60          3.579
+## DukeSocTotDSSI          2.483
+## overweight              2.184
 ## 
 ## [[5]]
-## Confusion Matrix and Statistics
+## glmnet variable importance
 ## 
-##           Reference
-## Prediction  0  1
-##          0 17  0
-##          1  0 25
-##                                      
-##                Accuracy : 1          
-##                  95% CI : (0.9159, 1)
-##     No Information Rate : 0.5952     
-##     P-Value [Acc &gt; NIR] : 3.444e-10  
-##                                      
-##                   Kappa : 1          
-##                                      
-##  Mcnemar&#39;s Test P-Value : NA         
-##                                      
-##             Sensitivity : 1.0000     
-##             Specificity : 1.0000     
-##          Pos Pred Value : 1.0000     
-##          Neg Pred Value : 1.0000     
-##              Prevalence : 0.4048     
-##          Detection Rate : 0.4048     
-##    Detection Prevalence : 0.4048     
-##       Balanced Accuracy : 1.0000     
-##                                      
-##        &#39;Positive&#39; Class : 0          
-## </code></pre>
+##   only 20 most important variables shown (out of 36)
+## 
+##                         Overall
+## hypo_unaware           100.0000
+## hypo_reducedAwareness   75.2119
+## underweight             50.8444
+## hispanic                34.7175
+## betaBlocker             30.3571
+## race_white              22.1802
+## race_black              21.6956
+## insDose_greater60       13.6680
+## abnormalCreatinine      13.0144
+## frailty                  9.1925
+## NumHospDKA               5.4407
+## Gender                   5.4241
+## geriDepressionScore      4.3447
+## obese                    3.4583
+## insDose_40to60           0.9367
+## SymbDigWTotCorr          0.6310
+## FuncActTotTestScore      0.5271
+## DukeSocTotDSSI           0.4750
+## DaysMoDrinkAlc           0.1339
+## NumPumpBolusOrShortAct   0.0000</code></pre>
 </div>
+<div id="descriptives-table" class="section level1">
+<h1>Descriptives table</h1>
+<pre class="r"><code>table1df &lt;- analysisWithMissing %&gt;%
+  filter(str_detect(exclude, &quot;No&quot;)) %&gt;%
+  mutate(Gender = factor(Gender, levels = c(&quot;F&quot;, &quot;M&quot;), labels = c(&quot;Female&quot;, &quot;Male&quot;)),
+         Race = factor(Race, 
+                       levels = c(&quot;White&quot;, &quot;Asian&quot;, &quot;Unknown/not reported&quot;, 
+                                  &quot;Black/African American&quot;, 
+                                  &quot;American Indian/Alaskan Native&quot;),
+                       labels = c(&quot;White&quot;, &quot;Asian&quot;, &quot;Unknown/not reported&quot;, 
+                                  &quot;Black/African American&quot;, 
+                                  &quot;American Indian/Alaskan Native&quot;)),
+         Ethnicity = factor(Ethnicity),
+         `Exercise (days per week)` = DaysWkEx, 
+         `Lives alone` = LiveAlone,
+         `Insulin delivery method` = InsDeliveryMethod,
+         `Units Insulin (bolus or long acting)` = UnitsInsBasalOrLongAct,
+         `Number boluses or injections short acting per day` = NumPumpBolusOrShortAct,
+         `Days hospitalized DKA` = NumHospDKA,
+         HBA1C = as.numeric(HBA1C),
+         `Beta blocker use` = factor(betaBlocker, levels = c(1, 0), labels = c(&quot;Yes&quot;, &quot;no&quot;)),
+         `Symbolic Digits Written test` = SymbDigWTotCorr,
+         `Symbolic Digits Oral test` = SymbDigOTotCorr,
+         `Trail Making test` = TrailMakATotTime,
+         `Grooved Peg Board test (dominant hand)` = GrPegDomTotTime,
+         `Functional Activity score` = FuncActTotTestScore,
+         `Duke Social Support scale` = DukeSocTotDSSI,
+         `Geriatric Depression score` = geriDepressionScore,
+         `Hypoglycemia unawareness` = factor(hypoUnaware, levels = c(&quot;hypo aware&quot;, &quot;reduced awareness&quot;, &quot;unaware&quot;),
+                                             labels = c(&quot;Aware&quot;, &quot;Reduced awareness&quot;, &quot;Unaware&quot;)),
+         `Diabetes Numeracy score` = diabNumeracyScore,
+         `Montreal Cognitive Assessment score` = MoCATotal,
+         `Education` = factor(educationCat, levels = c(&quot;HS&quot;, &quot;College&quot;, &quot;Advanced degree&quot;),
+                              labels = c(&quot;&lt;= HS&quot;, &quot;Any college&quot;, &quot;Advanced degree&quot;)),
+         `Any insurance` = factor(anyInsurance, levels = c(0, 1),
+                                  labels = c(&quot;No&quot;, &quot;Yes&quot;)),
+         `Alcohol use (days per month)` = DaysMoDrinkAlc,
+         `Insulin dose` = factor(insDoseCat, levels = c(&quot;less40&quot;, &quot;40to60&quot;, &quot;greater60&quot;),
+                                 labels = c(&quot;&lt;40&quot;, &quot;40-60&quot;, &quot;&gt;60&quot;)),
+         `Detectable C-peptide` = factor(detectableCPEP, levels = c(0, 1),
+                                         labels = c(&quot;&lt;0.017&quot;, &quot;&gt;=0.017&quot;)),
+         `Abnormal creatinine` = factor(abnormalCreatinine, levels = c(0, 1),
+                                        labels = c(&quot;&lt;=1.1 females/&lt;=1.2 males&quot;, &quot;&gt;1.1 females/&gt;1.2 males&quot;)),
+         `Average frailty walk time` = frailty,
+         `BMI category` = factor(bmiCat, levels = c(&quot;underweight&quot;, &quot;normal&quot;, &quot;overweight&quot;, &quot;obese&quot;),
+                                 labels = c(&quot;Underweight&quot;, &quot;Normal weight&quot;, &quot;Overweight&quot;, &quot;Obese&quot;))) 
+
+table1_out &lt;- table1(~ Gender + Race + Ethnicity + 
+         `Education` + `Any insurance` + `BMI category` +
+         `Exercise (days per week)` +
+         `Lives alone` + `Alcohol use (days per month)` +
+         `Insulin delivery method` + `Insulin dose` +
+         `Number boluses or injections short acting per day` +
+         `Days hospitalized DKA` + HBA1C + `Detectable C-peptide` + 
+         `Abnormal creatinine` + `Beta blocker use` +
+         `Symbolic Digits Written test` + `Symbolic Digits Oral test` +
+         `Trail Making test` + `Grooved Peg Board test (dominant hand)` +
+         `Functional Activity score` + `Duke Social Support scale` +
+         `Geriatric Depression score` + `Hypoglycemia unawareness` +
+         `Diabetes Numeracy score` + `Montreal Cognitive Assessment score` +
+         `Average frailty walk time`
+         | BCaseControlStatus, data = table1df)
+# Knitted table
+table1_out</code></pre>
+<div class="Rtable1"><table class="Rtable1">
+<thead>
+<tr>
+<th class="rowlabel firstrow lastrow"></th>
+<th class="firstrow lastrow"><span class="stratlabel">Case<br><span class="stratn">(N=101)</span></span></th>
+<th class="firstrow lastrow"><span class="stratlabel">Control<br><span class="stratn">(N=100)</span></span></th>
+<th class="firstrow lastrow"><span class="stratlabel">Overall<br><span class="stratn">(N=201)</span></span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="rowlabel firstrow">Gender</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Female</td>
+<td>51 (50.5%)</td>
+<td>44 (44.0%)</td>
+<td>95 (47.3%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Male</td>
+<td class="lastrow">50 (49.5%)</td>
+<td class="lastrow">56 (56.0%)</td>
+<td class="lastrow">106 (52.7%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Race</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">White</td>
+<td>96 (95.0%)</td>
+<td>95 (95.0%)</td>
+<td>191 (95.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Asian</td>
+<td>0 (0%)</td>
+<td>1 (1.0%)</td>
+<td>1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Unknown/not reported</td>
+<td>1 (1.0%)</td>
+<td>0 (0%)</td>
+<td>1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Black/African American</td>
+<td>4 (4.0%)</td>
+<td>3 (3.0%)</td>
+<td>7 (3.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">American Indian/Alaskan Native</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Ethnicity</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Not Hispanic or Latino</td>
+<td>98 (97.0%)</td>
+<td>96 (96.0%)</td>
+<td>194 (96.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Unknown/not reported</td>
+<td>0 (0%)</td>
+<td>1 (1.0%)</td>
+<td>1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Hispanic or Latino</td>
+<td class="lastrow">3 (3.0%)</td>
+<td class="lastrow">3 (3.0%)</td>
+<td class="lastrow">6 (3.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Education</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">&lt;= HS</td>
+<td>14 (13.9%)</td>
+<td>11 (11.0%)</td>
+<td>25 (12.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Any college</td>
+<td>59 (58.4%)</td>
+<td>65 (65.0%)</td>
+<td>124 (61.7%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Advanced degree</td>
+<td>27 (26.7%)</td>
+<td>23 (23.0%)</td>
+<td>50 (24.9%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Any insurance</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">No</td>
+<td>1 (1.0%)</td>
+<td>2 (2.0%)</td>
+<td>3 (1.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Yes</td>
+<td>99 (98.0%)</td>
+<td>98 (98.0%)</td>
+<td>197 (98.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">BMI category</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Underweight</td>
+<td>3 (3.0%)</td>
+<td>0 (0%)</td>
+<td>3 (1.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Normal weight</td>
+<td>35 (34.7%)</td>
+<td>36 (36.0%)</td>
+<td>71 (35.3%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Overweight</td>
+<td>36 (35.6%)</td>
+<td>37 (37.0%)</td>
+<td>73 (36.3%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Obese</td>
+<td>25 (24.8%)</td>
+<td>25 (25.0%)</td>
+<td>50 (24.9%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">4 (2.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Exercise (days per week)</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>5.16 (2.07)</td>
+<td>5.04 (1.96)</td>
+<td>5.10 (2.01)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>6.00 [0, 7.00]</td>
+<td>5.00 [0, 7.00]</td>
+<td>6.00 [0, 7.00]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Lives alone</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">No</td>
+<td>76 (75.2%)</td>
+<td>78 (78.0%)</td>
+<td>154 (76.6%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Yes</td>
+<td class="lastrow">25 (24.8%)</td>
+<td class="lastrow">22 (22.0%)</td>
+<td class="lastrow">47 (23.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Alcohol use (days per month)</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>9.96 (12.2)</td>
+<td>9.29 (11.9)</td>
+<td>9.63 (12.0)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>3.50 [0, 30.0]</td>
+<td>2.50 [0, 30.0]</td>
+<td>3.00 [0, 30.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Insulin delivery method</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Injections</td>
+<td>42 (41.6%)</td>
+<td>41 (41.0%)</td>
+<td>83 (41.3%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Pump</td>
+<td class="lastrow">59 (58.4%)</td>
+<td class="lastrow">59 (59.0%)</td>
+<td class="lastrow">118 (58.7%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Insulin dose</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">&lt;40</td>
+<td>46 (45.5%)</td>
+<td>43 (43.0%)</td>
+<td>89 (44.3%)</td>
+</tr>
+<tr>
+<td class="rowlabel">40-60</td>
+<td>22 (21.8%)</td>
+<td>33 (33.0%)</td>
+<td>55 (27.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel">&gt;60</td>
+<td>21 (20.8%)</td>
+<td>18 (18.0%)</td>
+<td>39 (19.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">12 (11.9%)</td>
+<td class="lastrow">6 (6.0%)</td>
+<td class="lastrow">18 (9.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Number boluses or injections short acting per day</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>4.95 (4.21)</td>
+<td>4.95 (5.06)</td>
+<td>4.95 (4.65)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>4.00 [2.00, 25.0]</td>
+<td>4.00 [2.00, 37.0]</td>
+<td>4.00 [2.00, 37.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">20 (19.8%)</td>
+<td class="lastrow">13 (13.0%)</td>
+<td class="lastrow">33 (16.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Days hospitalized DKA</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>0.0900 (0.351)</td>
+<td>0.0200 (0.141)</td>
+<td>0.0550 (0.269)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>0 [0, 2.00]</td>
+<td>0 [0, 1.00]</td>
+<td>0 [0, 2.00]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">HBA1C</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>7.78 (1.34)</td>
+<td>7.68 (1.10)</td>
+<td>7.73 (1.22)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Median [Min, Max]</td>
+<td class="lastrow">7.80 [3.30, 11.0]</td>
+<td class="lastrow">7.70 [5.40, 11.5]</td>
+<td class="lastrow">7.70 [3.30, 11.5]</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Detectable C-peptide</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">&lt;0.017</td>
+<td>80 (79.2%)</td>
+<td>74 (74.0%)</td>
+<td>154 (76.6%)</td>
+</tr>
+<tr>
+<td class="rowlabel">&gt;=0.017</td>
+<td>19 (18.8%)</td>
+<td>26 (26.0%)</td>
+<td>45 (22.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Abnormal creatinine</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">&lt;=1.1 females/&lt;=1.2 males</td>
+<td>80 (79.2%)</td>
+<td>92 (92.0%)</td>
+<td>172 (85.6%)</td>
+</tr>
+<tr>
+<td class="rowlabel">&gt;1.1 females/&gt;1.2 males</td>
+<td>19 (18.8%)</td>
+<td>8 (8.0%)</td>
+<td>27 (13.4%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Beta blocker use</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Yes</td>
+<td>41 (40.6%)</td>
+<td>21 (21.0%)</td>
+<td>62 (30.8%)</td>
+</tr>
+<tr>
+<td class="rowlabel">no</td>
+<td>59 (58.4%)</td>
+<td>78 (78.0%)</td>
+<td>137 (68.2%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Symbolic Digits Written test</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>36.5 (10.5)</td>
+<td>41.8 (10.4)</td>
+<td>39.1 (10.7)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>35.0 [12.0, 66.0]</td>
+<td>42.0 [17.0, 71.0]</td>
+<td>38.0 [12.0, 71.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">4 (4.0%)</td>
+<td class="lastrow">4 (4.0%)</td>
+<td class="lastrow">8 (4.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Symbolic Digits Oral test</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>42.3 (11.7)</td>
+<td>46.8 (11.0)</td>
+<td>44.5 (11.6)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>41.0 [16.0, 74.0]</td>
+<td>47.0 [19.0, 74.0]</td>
+<td>44.0 [16.0, 74.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">4 (4.0%)</td>
+<td class="lastrow">5 (5.0%)</td>
+<td class="lastrow">9 (4.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Trail Making test</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>40.1 (14.1)</td>
+<td>36.7 (14.9)</td>
+<td>38.4 (14.6)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Median [Min, Max]</td>
+<td class="lastrow">39.0 [15.0, 95.0]</td>
+<td class="lastrow">34.0 [16.0, 120]</td>
+<td class="lastrow">36.0 [15.0, 120]</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Grooved Peg Board test (dominant hand)</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>109 (40.3)</td>
+<td>98.8 (38.5)</td>
+<td>104 (39.6)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>99.0 [64.0, 261]</td>
+<td>87.0 [59.0, 278]</td>
+<td>93.0 [59.0, 278]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Functional Activity score</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>1.64 (4.15)</td>
+<td>1.54 (4.83)</td>
+<td>1.59 (4.49)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Median [Min, Max]</td>
+<td class="lastrow">0 [0, 30.0]</td>
+<td class="lastrow">0 [0, 30.0]</td>
+<td class="lastrow">0 [0, 30.0]</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Duke Social Support scale</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>27.5 (3.61)</td>
+<td>28.4 (3.11)</td>
+<td>28.0 (3.40)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>28.0 [15.0, 33.0]</td>
+<td>29.0 [14.0, 33.0]</td>
+<td>29.0 [14.0, 33.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Geriatric Depression score</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>1.51 (2.10)</td>
+<td>1.60 (2.14)</td>
+<td>1.56 (2.11)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>1.00 [0, 8.00]</td>
+<td>1.00 [0, 9.00]</td>
+<td>1.00 [0, 9.00]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Hypoglycemia unawareness</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Aware</td>
+<td>26 (25.7%)</td>
+<td>79 (79.0%)</td>
+<td>105 (52.2%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Reduced awareness</td>
+<td>67 (66.3%)</td>
+<td>19 (19.0%)</td>
+<td>86 (42.8%)</td>
+</tr>
+<tr>
+<td class="rowlabel">Unaware</td>
+<td>6 (5.9%)</td>
+<td>1 (1.0%)</td>
+<td>7 (3.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">2 (2.0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">3 (1.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Diabetes Numeracy score</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>72.9 (20.0)</td>
+<td>75.8 (16.2)</td>
+<td>74.4 (18.2)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>80.0 [6.67, 93.3]</td>
+<td>80.0 [26.7, 93.3]</td>
+<td>80.0 [6.67, 93.3]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">8 (7.9%)</td>
+<td class="lastrow">7 (7.0%)</td>
+<td class="lastrow">15 (7.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Montreal Cognitive Assessment score</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>25.2 (3.12)</td>
+<td>26.1 (2.84)</td>
+<td>25.6 (3.02)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>26.0 [13.0, 31.0]</td>
+<td>26.0 [18.0, 30.0]</td>
+<td>26.0 [13.0, 31.0]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">0 (0%)</td>
+<td class="lastrow">1 (0.5%)</td>
+</tr>
+<tr>
+<td class="rowlabel firstrow">Average frailty walk time</td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+<td class="firstrow"></td>
+</tr>
+<tr>
+<td class="rowlabel">Mean (SD)</td>
+<td>3.48 (1.04)</td>
+<td>3.14 (0.749)</td>
+<td>3.31 (0.920)</td>
+</tr>
+<tr>
+<td class="rowlabel">Median [Min, Max]</td>
+<td>3.25 [2.00, 7.50]</td>
+<td>3.00 [2.00, 6.50]</td>
+<td>3.00 [2.00, 7.50]</td>
+</tr>
+<tr>
+<td class="rowlabel lastrow">Missing</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">1 (1.0%)</td>
+<td class="lastrow">2 (1.0%)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<pre class="r"><code># Create the latex table
+print(xtable(as.data.frame(table1_out)), include.rownames = FALSE)</code></pre>
+<pre><code>## % latex table generated in R 4.2.2 by xtable 1.8-4 package
+## % Mon Nov 28 15:07:16 2022
+## \begin{table}[ht]
+## \centering
+## \begin{tabular}{llll}
+##   \hline
+##   &amp; Case &amp; Control &amp; Overall \\ 
+##   \hline
+##  &amp; (N=101) &amp; (N=100) &amp; (N=201) \\ 
+##   Gender &amp;  &amp;  &amp;  \\ 
+##     Female &amp; 51 (50.5\%) &amp; 44 (44.0\%) &amp; 95 (47.3\%) \\ 
+##     Male &amp; 50 (49.5\%) &amp; 56 (56.0\%) &amp; 106 (52.7\%) \\ 
+##   Race &amp;  &amp;  &amp;  \\ 
+##     White &amp; 96 (95.0\%) &amp; 95 (95.0\%) &amp; 191 (95.0\%) \\ 
+##     Asian &amp; 0 (0\%) &amp; 1 (1.0\%) &amp; 1 (0.5\%) \\ 
+##     Unknown/not reported &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##     Black/African American &amp; 4 (4.0\%) &amp; 3 (3.0\%) &amp; 7 (3.5\%) \\ 
+##     American Indian/Alaskan Native &amp; 0 (0\%) &amp; 1 (1.0\%) &amp; 1 (0.5\%) \\ 
+##   Ethnicity &amp;  &amp;  &amp;  \\ 
+##     Not Hispanic or Latino &amp; 98 (97.0\%) &amp; 96 (96.0\%) &amp; 194 (96.5\%) \\ 
+##     Unknown/not reported &amp; 0 (0\%) &amp; 1 (1.0\%) &amp; 1 (0.5\%) \\ 
+##     Hispanic or Latino &amp; 3 (3.0\%) &amp; 3 (3.0\%) &amp; 6 (3.0\%) \\ 
+##   Education &amp;  &amp;  &amp;  \\ 
+##     $&lt;$= HS &amp; 14 (13.9\%) &amp; 11 (11.0\%) &amp; 25 (12.4\%) \\ 
+##     Any college &amp; 59 (58.4\%) &amp; 65 (65.0\%) &amp; 124 (61.7\%) \\ 
+##     Advanced degree &amp; 27 (26.7\%) &amp; 23 (23.0\%) &amp; 50 (24.9\%) \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 1 (1.0\%) &amp; 2 (1.0\%) \\ 
+##   Any insurance &amp;  &amp;  &amp;  \\ 
+##     No &amp; 1 (1.0\%) &amp; 2 (2.0\%) &amp; 3 (1.5\%) \\ 
+##     Yes &amp; 99 (98.0\%) &amp; 98 (98.0\%) &amp; 197 (98.0\%) \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##   BMI category &amp;  &amp;  &amp;  \\ 
+##     Underweight &amp; 3 (3.0\%) &amp; 0 (0\%) &amp; 3 (1.5\%) \\ 
+##     Normal weight &amp; 35 (34.7\%) &amp; 36 (36.0\%) &amp; 71 (35.3\%) \\ 
+##     Overweight &amp; 36 (35.6\%) &amp; 37 (37.0\%) &amp; 73 (36.3\%) \\ 
+##     Obese &amp; 25 (24.8\%) &amp; 25 (25.0\%) &amp; 50 (24.9\%) \\ 
+##     Missing &amp; 2 (2.0\%) &amp; 2 (2.0\%) &amp; 4 (2.0\%) \\ 
+##   Exercise (days per week) &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 5.16 (2.07) &amp; 5.04 (1.96) &amp; 5.10 (2.01) \\ 
+##     Median [Min, Max] &amp; 6.00 [0, 7.00] &amp; 5.00 [0, 7.00] &amp; 6.00 [0, 7.00] \\ 
+##     Missing &amp; 2 (2.0\%) &amp; 0 (0\%) &amp; 2 (1.0\%) \\ 
+##   Lives alone &amp;  &amp;  &amp;  \\ 
+##     No &amp; 76 (75.2\%) &amp; 78 (78.0\%) &amp; 154 (76.6\%) \\ 
+##     Yes &amp; 25 (24.8\%) &amp; 22 (22.0\%) &amp; 47 (23.4\%) \\ 
+##   Alcohol use (days per month) &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 9.96 (12.2) &amp; 9.29 (11.9) &amp; 9.63 (12.0) \\ 
+##     Median [Min, Max] &amp; 3.50 [0, 30.0] &amp; 2.50 [0, 30.0] &amp; 3.00 [0, 30.0] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##   Insulin delivery method &amp;  &amp;  &amp;  \\ 
+##     Injections &amp; 42 (41.6\%) &amp; 41 (41.0\%) &amp; 83 (41.3\%) \\ 
+##     Pump &amp; 59 (58.4\%) &amp; 59 (59.0\%) &amp; 118 (58.7\%) \\ 
+##   Insulin dose &amp;  &amp;  &amp;  \\ 
+##     $&lt;$40 &amp; 46 (45.5\%) &amp; 43 (43.0\%) &amp; 89 (44.3\%) \\ 
+##     40-60 &amp; 22 (21.8\%) &amp; 33 (33.0\%) &amp; 55 (27.4\%) \\ 
+##     $&gt;$60 &amp; 21 (20.8\%) &amp; 18 (18.0\%) &amp; 39 (19.4\%) \\ 
+##     Missing &amp; 12 (11.9\%) &amp; 6 (6.0\%) &amp; 18 (9.0\%) \\ 
+##   Number boluses or injections short acting per day &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 4.95 (4.21) &amp; 4.95 (5.06) &amp; 4.95 (4.65) \\ 
+##     Median [Min, Max] &amp; 4.00 [2.00, 25.0] &amp; 4.00 [2.00, 37.0] &amp; 4.00 [2.00, 37.0] \\ 
+##     Missing &amp; 20 (19.8\%) &amp; 13 (13.0\%) &amp; 33 (16.4\%) \\ 
+##   Days hospitalized DKA &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 0.0900 (0.351) &amp; 0.0200 (0.141) &amp; 0.0550 (0.269) \\ 
+##     Median [Min, Max] &amp; 0 [0, 2.00] &amp; 0 [0, 1.00] &amp; 0 [0, 2.00] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##   HBA1C &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 7.78 (1.34) &amp; 7.68 (1.10) &amp; 7.73 (1.22) \\ 
+##     Median [Min, Max] &amp; 7.80 [3.30, 11.0] &amp; 7.70 [5.40, 11.5] &amp; 7.70 [3.30, 11.5] \\ 
+##   Detectable C-peptide &amp;  &amp;  &amp;  \\ 
+##     $&lt;$0.017 &amp; 80 (79.2\%) &amp; 74 (74.0\%) &amp; 154 (76.6\%) \\ 
+##     $&gt;$=0.017 &amp; 19 (18.8\%) &amp; 26 (26.0\%) &amp; 45 (22.4\%) \\ 
+##     Missing &amp; 2 (2.0\%) &amp; 0 (0\%) &amp; 2 (1.0\%) \\ 
+##   Abnormal creatinine &amp;  &amp;  &amp;  \\ 
+##     $&lt;$=1.1 females/$&lt;$=1.2 males &amp; 80 (79.2\%) &amp; 92 (92.0\%) &amp; 172 (85.6\%) \\ 
+##     $&gt;$1.1 females/$&gt;$1.2 males &amp; 19 (18.8\%) &amp; 8 (8.0\%) &amp; 27 (13.4\%) \\ 
+##     Missing &amp; 2 (2.0\%) &amp; 0 (0\%) &amp; 2 (1.0\%) \\ 
+##   Beta blocker use &amp;  &amp;  &amp;  \\ 
+##     Yes &amp; 41 (40.6\%) &amp; 21 (21.0\%) &amp; 62 (30.8\%) \\ 
+##     no &amp; 59 (58.4\%) &amp; 78 (78.0\%) &amp; 137 (68.2\%) \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 1 (1.0\%) &amp; 2 (1.0\%) \\ 
+##   Symbolic Digits Written test &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 36.5 (10.5) &amp; 41.8 (10.4) &amp; 39.1 (10.7) \\ 
+##     Median [Min, Max] &amp; 35.0 [12.0, 66.0] &amp; 42.0 [17.0, 71.0] &amp; 38.0 [12.0, 71.0] \\ 
+##     Missing &amp; 4 (4.0\%) &amp; 4 (4.0\%) &amp; 8 (4.0\%) \\ 
+##   Symbolic Digits Oral test &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 42.3 (11.7) &amp; 46.8 (11.0) &amp; 44.5 (11.6) \\ 
+##     Median [Min, Max] &amp; 41.0 [16.0, 74.0] &amp; 47.0 [19.0, 74.0] &amp; 44.0 [16.0, 74.0] \\ 
+##     Missing &amp; 4 (4.0\%) &amp; 5 (5.0\%) &amp; 9 (4.5\%) \\ 
+##   Trail Making test &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 40.1 (14.1) &amp; 36.7 (14.9) &amp; 38.4 (14.6) \\ 
+##     Median [Min, Max] &amp; 39.0 [15.0, 95.0] &amp; 34.0 [16.0, 120] &amp; 36.0 [15.0, 120] \\ 
+##   Grooved Peg Board test (dominant hand) &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 109 (40.3) &amp; 98.8 (38.5) &amp; 104 (39.6) \\ 
+##     Median [Min, Max] &amp; 99.0 [64.0, 261] &amp; 87.0 [59.0, 278] &amp; 93.0 [59.0, 278] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 1 (1.0\%) &amp; 2 (1.0\%) \\ 
+##   Functional Activity score &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 1.64 (4.15) &amp; 1.54 (4.83) &amp; 1.59 (4.49) \\ 
+##     Median [Min, Max] &amp; 0 [0, 30.0] &amp; 0 [0, 30.0] &amp; 0 [0, 30.0] \\ 
+##   Duke Social Support scale &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 27.5 (3.61) &amp; 28.4 (3.11) &amp; 28.0 (3.40) \\ 
+##     Median [Min, Max] &amp; 28.0 [15.0, 33.0] &amp; 29.0 [14.0, 33.0] &amp; 29.0 [14.0, 33.0] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##   Geriatric Depression score &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 1.51 (2.10) &amp; 1.60 (2.14) &amp; 1.56 (2.11) \\ 
+##     Median [Min, Max] &amp; 1.00 [0, 8.00] &amp; 1.00 [0, 9.00] &amp; 1.00 [0, 9.00] \\ 
+##     Missing &amp; 0 (0\%) &amp; 1 (1.0\%) &amp; 1 (0.5\%) \\ 
+##   Hypoglycemia unawareness &amp;  &amp;  &amp;  \\ 
+##     Aware &amp; 26 (25.7\%) &amp; 79 (79.0\%) &amp; 105 (52.2\%) \\ 
+##     Reduced awareness &amp; 67 (66.3\%) &amp; 19 (19.0\%) &amp; 86 (42.8\%) \\ 
+##     Unaware &amp; 6 (5.9\%) &amp; 1 (1.0\%) &amp; 7 (3.5\%) \\ 
+##     Missing &amp; 2 (2.0\%) &amp; 1 (1.0\%) &amp; 3 (1.5\%) \\ 
+##   Diabetes Numeracy score &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 72.9 (20.0) &amp; 75.8 (16.2) &amp; 74.4 (18.2) \\ 
+##     Median [Min, Max] &amp; 80.0 [6.67, 93.3] &amp; 80.0 [26.7, 93.3] &amp; 80.0 [6.67, 93.3] \\ 
+##     Missing &amp; 8 (7.9\%) &amp; 7 (7.0\%) &amp; 15 (7.5\%) \\ 
+##   Montreal Cognitive Assessment score &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 25.2 (3.12) &amp; 26.1 (2.84) &amp; 25.6 (3.02) \\ 
+##     Median [Min, Max] &amp; 26.0 [13.0, 31.0] &amp; 26.0 [18.0, 30.0] &amp; 26.0 [13.0, 31.0] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 0 (0\%) &amp; 1 (0.5\%) \\ 
+##   Average frailty walk time &amp;  &amp;  &amp;  \\ 
+##     Mean (SD) &amp; 3.48 (1.04) &amp; 3.14 (0.749) &amp; 3.31 (0.920) \\ 
+##     Median [Min, Max] &amp; 3.25 [2.00, 7.50] &amp; 3.00 [2.00, 6.50] &amp; 3.00 [2.00, 7.50] \\ 
+##     Missing &amp; 1 (1.0\%) &amp; 1 (1.0\%) &amp; 2 (1.0\%) \\ 
+##    \hline
+## \end{tabular}
+## \end{table}</code></pre>
 </div>
 
 
