@@ -173,21 +173,27 @@ This chunk generates the predictive performance plots.
 ```{r}
 predPerfDF <- bind_rows(rf_plotMetrics, regLog_plotMetrics, svm_plotMetrics) %>%
   mutate(fold = rep(1:5, 3)) %>%
-  dplyr::select(Method, fold, Sensitivity, Specificity, Precision, Recall) %>% 
-  pivot_longer(cols = c(Sensitivity, Specificity, Precision, Recall), 
+  dplyr::select(Method, fold, Sensitivity, Specificity, Precision) %>% 
+  pivot_longer(cols = c(Sensitivity, Specificity, Precision), 
                names_to = "metric", values_to = "value") %>%
   replace_na(list(value = 0))
 
 predPerfPlot <- predPerfDF %>% 
   ggplot(aes(x = Method, y = value, color = Method)) +
-  geom_point() +
+  geom_point(size = 3) +
   facet_wrap(~metric) +
   theme_minimal() +
   labs(y = element_blank(), x = element_blank()) +
-  theme(legend.position = "bottom")
+  scale_y_continuous(breaks = seq(0.6, 1.0, by = 0.1), labels = c(as.character(seq(0.6, 0.9, by = 0.1)), "1.0"),
+                     limits = c(0.6, 1.0)) +
+  theme(legend.position = "bottom",
+        panel.border = element_rect(color = "black", size = 1, fill = NA),
+        strip.text = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.text = element_text(size = 12))
 
 ggsave(predPerfPlot, file = "../3_output/0_predPerfPlot.png", device = "png",
-       bg = "white", width = 12, height = 7, units = "in")
+       bg = "white", width = 12, height = 6, units = "in")
 ```
 
 # Average predictive performance
