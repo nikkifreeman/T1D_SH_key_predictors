@@ -7,3 +7,9 @@ SevereHypoDataset-c14d3739-6a20-449c-bbae-c02ff1764a91
 # Intermediate data files that contain individual data
 *.xlsx
 *.csv
+
+# Files related to .Rmd builds
+*.nb.html
+
+# R specific files
+*.RHistory

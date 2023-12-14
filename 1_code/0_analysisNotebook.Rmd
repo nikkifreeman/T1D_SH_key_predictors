@@ -1,0 +1,746 @@
+---
+title: Identification of key risk factors associated with severe hypoglycemia in older
+  adults with Type 1 Diabetes
+author: "Nikki L. B. Freeman"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: yes
+---
+
+This notebook contains the main steps in the analysis for "Identification of key risk factors associated with severe hypoglycemia in older adults with Type 1 Diabetes". Function files are located in the same directory as this notebook. 
+
+# Packages, functions, and data
+
+The `getRawDataTables` function reads in the individual data tables from the raw data set. 
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+# Packages needed for the analysis
+library(tidyverse)
+library(mice)
+library(caret)
+library(randomForest)
+library(glmnet)
+library(xtable)
+library(table1)
+library(RRF)
+library(mlbench)
+
+# Functions
+source("1_createAnalysisRaw.R")
+source("2_dataPreparation2.R")
+source("3_imputation.R")
+source("4_randomForest.R")
+source("5_featureSelection.R")
+
+# Load the raw data
+dataTables <- getRawDataTables("../")
+```
+
+# Data cleaning and preparation
+
+The `collectVariables` function extracts from each data table, the variables of interest for the analysis. For some variables, minor data cleaning is completed, including 
+
+  * Adding an inclusion/exclusion variable: two participants are excluded due to not having any demographic data available
+  * Adjudicating duplicate lab results: if one entry is NULL and the other is not, take the non-NULL entry; otherwise, average the entries.
+  * Scoring the diabetes numeracy test
+  * Scoring the geriatric depression test
+  * Identifying beta blockers from the medication list and creating a binary beta blocker variable
+  * Scoring the hypoglycemia unawareness survey
+  
+The`makeAnalysisDataWithMissing` does additional data cleaning and perparation to yield a dataframe with all of the observed data that will be used for the analysis. The cleaning steps include: 
+  
+  * Re-coding education into categories (highest educational attainment <= HS, Some college or college degree, or advanced degree)
+  * Re-coding insurance into a binary variable for having insurance (public, private, single service) or not
+  * Calculating BMI and categorizing into BMI classes (BMI < 18.5 as underweight, 18.5 $\le$ BMI < 25 as normal weight, 15 $\le$ BMI < 30 as overweight, and BMI $\ge$ 30 as obese)
+  * Re-coding total insulin units as <40, $\ge$ 40 and <60, and $\ge$ 60
+  * Averaging the two frailty walk scores to  yield a single frailty walk score for each individual
+  * Hopkins Verbal learning test is the sum of the total correct from the first 3 trials, the delayed recall is the value of the 4th trial
+
+```{r}
+# Collect the variables of interest from the various tables and put into a single analysisData_raw dataframe
+# Some variables are missing their scores or are re-coded
+analysisData_raw <- collectVariables(dataTables) 
+# Write the analysis data to a csv
+write_csv(x = analysisData_raw, file = "../2_pipeline/1_analysis_raw.csv")
+
+# Create analytic data set for analysis
+analysisWithMissing <- makeAnalysisDataWithMissing(analysisData_raw = analysisData_raw) 
+  
+
+# Write the analysis data set to a csv
+write_csv(x = analysisWithMissing, file = "../2_pipeline/2_analysisDataWithMissing.csv")
+
+```
+
+# Imputation and preparation of testing and training sets
+
+The `getImputationDataSets` function takes the observed data for analysis and creates 5 imputed dated sets. The full observed data set for imputation. The `createTrainTest` function takes the imputed dated and observed data to generate a test set composed of only complete cases and 5 imputation sets that are used for training the models (effectively, these are folds).
+
+```{r, message = FALSE, warning = FALSE, results = 'hide'}
+set.seed(5678)
+imputedData <- getImputationDataSets(analysisWithMissing = analysisWithMissing)
+# trainTest <- createTrainTest(analysisWithMissing = analysisWithMissing, imputedData = imputedData)
+
+```
+
+# Model Fitting 
+## Generate the common test set
+```{r}
+# Create a common test set across models
+completeCases <- analysisWithMissing[complete.cases(analysisWithMissing),]
+testSet <- caret::createDataPartition(y  = completeCases$BCaseControlStatus, p = 0.40)
+testSetIDs <- completeCases[testSet[[1]],]$PtID
+```
+
+## Predictor selection and train/test construction
+### Model 1: Demographic and clinical variables
+```{r}
+predictors_model1 <- c("PtID", "BCaseControlStatus", "exclude", 
+                       "Gender", "nonHispWhite", "educationCat", "insurance", 
+                       "bmiCat", "insDoseCat", "glucoseMonitoringCat", "HBA1C", 
+                       "detectableCPEP", "betaBlocker", "abnormalCreatinine", 
+                       "frailty", "hypoUnaware")
+imputedData_model1 <- imputedData %>%
+  select(all_of(predictors_model1), ".imp", ".id")
+
+trainTest_model1 <- createTrainTest(analysisWithMissing = analysisWithMissing, 
+                                    imputedData = imputedData_model1,
+                                    predictors = predictors_model1, 
+                                    testSetIDs = testSetIDs)
+```
+
+### Model 2: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors
+```{r}
+predictors_model2 <- c(predictors_model1,
+                       "DaysWkEx", "LiveAlone", "hypoFear", "DukeSocTotDSSI",
+                       "FuncActTotTestScore")
+imputedData_model2 <- imputedData %>%
+  dplyr::select(all_of(predictors_model2), ".imp", ".id")
+
+trainTest_model2 <- createTrainTest(analysisWithMissing = analysisWithMissing,
+                                    imputedData = imputedData_model2,
+                                    predictors = predictors_model2,
+                                    testSetIDs = testSetIDs)
+
+```
+
+### Model 3: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors (Model 2) + neurocognitive factors
+```{r}
+predictors_model3 <- c(predictors_model2, 
+                       "MoCATotal", "SymbDigWTotCorr", "SymbDigOTotCorr",
+                       "TrailMakATotTime", "TrailMakBTotTime", "GrPegDomTotTime")
+imputedData_model3 <- imputedData %>%
+  dplyr::select(all_of(predictors_model3), ".imp", ".id")
+
+trainTest_model3 <- createTrainTest(analysisWithMissing = analysisWithMissing,
+                                    imputedData = imputedData_model3,
+                                    predictors = predictors_model3,
+                                    testSetIDs = testSetIDs)
+```
+
+### Model 4: Demographic and clinical variables (Model 1) + behavior and lifestyle factors (Model 2) + neurocognitive factors (Model 3) + CGM metrics
+```{r}
+predictors_model4 <- c(predictors_model3,
+                       "bgLess70_pct", "pctCV")
+
+imputedData_model4 <- imputedData %>%
+  dplyr::select(all_of(predictors_model4), ".imp", ".id")
+
+trainTest_model4 <- createTrainTest(analysisWithMissing = analysisWithMissing,
+                                    imputedData = imputedData_model4,
+                                    predictors = predictors_model4,
+                                    testSetIDs = testSetIDs)
+```
+
+## Random Forest
+### Feature selection (to avoid overfitting): remove redundancy
+```{r}
+# Remove redundant features (correlation >= 0.75)
+## Model 1
+correlationMatrix_model1 <- map(trainTest_model1$trainingSets_list, getCorrelationMatrix_model1)
+correlatedVars_model1 <- map(correlationMatrix_model1, findCorrelation, cutoff = 0.75)
+colnames(correlationMatrix_model1[[1]])[correlatedVars_model1[[1]]]
+colnames(correlationMatrix_model1[[2]])[correlatedVars_model1[[2]]]
+colnames(correlationMatrix_model1[[3]])[correlatedVars_model1[[3]]]
+colnames(correlationMatrix_model1[[4]])[correlatedVars_model1[[4]]]
+colnames(correlationMatrix_model1[[5]])[correlatedVars_model1[[5]]]
+# None of the covariates have correlation >= 0.75 (dummies within the same categorical variable, e.g., M and F which are within sex are not a problem)
+
+## Model 2
+correlationMatrix_model2 <- map(trainTest_model2$trainingSets_list, getCorrelationMatrix_model2)
+correlatedVars_model2 <- map(correlationMatrix_model2, findCorrelation, cutoff = 0.75)
+colnames(correlationMatrix_model2[[1]])[correlatedVars_model2[[1]]]
+colnames(correlationMatrix_model2[[2]])[correlatedVars_model2[[2]]]
+colnames(correlationMatrix_model2[[3]])[correlatedVars_model2[[3]]]
+colnames(correlationMatrix_model2[[4]])[correlatedVars_model2[[4]]]
+colnames(correlationMatrix_model2[[5]])[correlatedVars_model2[[5]]]
+# None of the covariates have correlation >= 0.75 (dummies within the same categorical variable, e.g., M and F which are within sex are not a problem)
+
+## Model 3
+correlationMatrix_model3 <- map(trainTest_model3$trainingSets_list, getCorrelationMatrix_model3)
+correlatedVars_model3 <- map(correlationMatrix_model3, findCorrelation, cutoff = 0.75)
+colnames(correlationMatrix_model3[[1]])[correlatedVars_model3[[1]]]
+colnames(correlationMatrix_model3[[2]])[correlatedVars_model3[[2]]]
+colnames(correlationMatrix_model3[[3]])[correlatedVars_model3[[3]]]
+colnames(correlationMatrix_model3[[4]])[correlatedVars_model3[[4]]]
+colnames(correlationMatrix_model3[[5]])[correlatedVars_model3[[5]]]
+# The symbolic digit oral and written tests are highly correlated
+
+## Model 4
+correlationMatrix_model4 <- map(trainTest_model4$trainingSets_list, getCorrelationMatrix_model4)
+correlatedVars_model4 <- map(correlationMatrix_model4, findCorrelation, cutoff = 0.75)
+colnames(correlationMatrix_model4[[1]])[correlatedVars_model4[[1]]]
+colnames(correlationMatrix_model4[[2]])[correlatedVars_model4[[2]]]
+colnames(correlationMatrix_model4[[3]])[correlatedVars_model4[[3]]]
+colnames(correlationMatrix_model4[[4]])[correlatedVars_model4[[4]]]
+colnames(correlationMatrix_model4[[5]])[correlatedVars_model4[[5]]]
+# The symbolic digit oral and written tests are highly correlated
+```
+
+Based on the correlation matrices, the sybolic digit oral and written tests are highly correlated. This means that they are likely contributing redundant information. In Weinstock et al., they found that the written test was more significant (p = 0.001) than the oral test (p = 0.01), so we will keep the written text and omit the oral test from our analyses.
+
+```{r}
+trainTest_model3$testingData <- trainTest_model3$testingData %>% dplyr::select(-SymbDigOTotCorr)
+trainTest_model3$trainingSets <- trainTest_model3$trainingSets %>% dplyr::select(-SymbDigOTotCorr)
+trainTest_model3$trainingSets_list <- map(trainTest_model3$trainingSets_list, function(df){df %>% dplyr::select(-SymbDigOTotCorr)})
+
+trainTest_model4$testingData <- trainTest_model4$testingData %>% dplyr::select(-SymbDigOTotCorr)
+trainTest_model4$trainingSets <- trainTest_model4$trainingSets %>% dplyr::select(-SymbDigOTotCorr)
+trainTest_model4$trainingSets_list <- map(trainTest_model4$trainingSets_list, function(df){df %>% dplyr::select(-SymbDigOTotCorr)})
+```
+
+## Feature selection (to avoid overfitting): Recursive feature elimination
+
+```{r}
+# RFE
+rfe_model1 <- map(trainTest_model1$trainingSets_list, doRFE)
+rfeResults_model1 <- reduce(map2(map(rfe_model1, function(x){pluck(x, "results")}), 1:5, function(x, y){x %>% mutate(fold = y)}), bind_rows)
+map(rfe_model1, function(x){pluck(x, "optVariables")})
+
+rfe_model2 <- map(trainTest_model2$trainingSets_list, doRFE)
+rfeResults_model2 <- reduce(map2(map(rfe_model2, function(x){pluck(x, "results")}), 1:5, function(x, y){x %>% mutate(fold = y)}), bind_rows)
+map(rfe_model2, function(x){pluck(x, "optVariables")})
+
+rfe_model3 <- map(trainTest_model3$trainingSets_list, doRFE)
+rfeResults_model3 <- reduce(map2(map(rfe_model3, function(x){pluck(x, "results")}), 1:5, function(x, y){x %>% mutate(fold = y)}), bind_rows)
+map(rfe_model3, function(x){pluck(x, "optVariables")})
+
+rfe_model4 <- map(trainTest_model4$trainingSets_list, doRFE)
+rfeResults_model4 <- reduce(map2(map(rfe_model4, function(x){pluck(x, "results")}), 1:5, function(x, y){x %>% mutate(fold = y)}), bind_rows)
+map(rfe_model4, function(x){pluck(x, "optVariables")})
+
+
+rfePlot <- bind_rows(rfeResults_model1 %>%
+  mutate(model = "Model 1: Demographic and clinical"),
+  rfeResults_model2 %>%
+  mutate(model = "Model 2: Model 1 + Behavioral and lifestyle"),
+  rfeResults_model3 %>%
+  mutate(model = "Model 3: Model 2 + Neurocognitive"),
+  rfeResults_model4 %>%
+  mutate(model = "Model 4: Model 3 + CGM measures")) %>%
+  ggplot(aes(x = Variables, y = Accuracy, group = fold, color = as.factor(fold))) +
+  geom_line() +
+  facet_wrap(~model, scale = "free") +
+  theme_minimal() +
+  xlab("Number of variables") +
+  scale_color_discrete(name = "Fold")
+ggsave(filename = "../3_output/rfeResults.png", rfePlot, device = "png", bg = "white", width = 7, height = 5, units = "in")
+```
+
+Based on the results from the RFE
+  
+    * For Model 1, most models across folds have the greatest accuracy when all 13 variables are included, so we will use all 13 variables
+    * For Model 2, most models across folds have the most accuracy when 16 variables are included, so we will use 16 of the possivle 18 variables
+    * For model 3, using 16 and all of the variables yields the most accuracy. We will use all of the variables since the marginal decrease in accuracy is smaller for those models/folds with the most accuracy with 16 variables than the marginal increase gained by the models/folds with the most accuracy when all of the variables are included
+    * For Model 4, most models across folds have the great accuracy when all variables are included, so we will use all of the variables
+    
+```{r}
+# map(rfe_model2, function(x){pluck(x, "optVariables")})
+# # Remove: nonHispWhite, DukeSocTotDSSI, bmiCat, FunctActTestScore, educationCat
+# trainTest_model2$testingData <- trainTest_model2$testingData %>% 
+#   dplyr::select(-c(nonHispWhite, DukeSocTotDSSI, bmiCat, FuncActTotTestScore, educationCat))
+# trainTest_model2$trainingSets <- trainTest_model2$trainingSets %>%
+#   dplyr::select(-c(nonHispWhite, DukeSocTotDSSI, bmiCat, FuncActTotTestScore, educationCat))
+# trainTest_model2$trainingSets_list <- map(trainTest_model2$trainingSets_list, function(x){x %>%  dplyr::select(-c(nonHispWhite, DukeSocTotDSSI, bmiCat, FuncActTotTestScore, educationCat))})
+```
+
+
+### Model fitting
+```{r}
+## Model 1: Demographic and clinical variables ----------------------------------------------------------------
+# Fit the random forest to the training data
+rfObjs_model1 <- map(trainTest_model1$trainingSets_list, rfHelper)
+# Predict on the test set
+rfPredictions_model1 <- map(rfObjs_model1, predict, trainTest_model1$testingData %>%
+                              dplyr::select(-c(BCaseControlStatus, PtID)))
+# Extract variable importance
+rfImportance_model1 <- map(rfObjs_model1, rfImportanceHelper)
+# Performance metrics
+rfMetrics_model1 <- map(rfPredictions_model1, confusionMatrix, reference = factor(trainTest_model1$testingData$BCaseControlStatus)) 
+rfPlotMetrics_model1 <- data.frame(reduce(map(1:5, ~rfMetrics_model1[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "RF") 
+
+## Model 2: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors --------------------
+# Fit the random forest to the training data
+rfObjs_model2 <- map(trainTest_model2$trainingSets_list, rfHelper)
+# Predict on the test set
+rfPredictions_model2 <- map(rfObjs_model2, predict, trainTest_model2$testingData %>%
+                              dplyr::select(-c(BCaseControlStatus, PtID)))
+# Extract variable importance
+rfImportance_model2 <- map(rfObjs_model2, rfImportanceHelper)
+# Performance metrics
+rfMetrics_model2 <- map(rfPredictions_model2, confusionMatrix, reference = factor(trainTest_model2$testingData$BCaseControlStatus)) 
+rfPlotMetrics_model2 <- data.frame(reduce(map(1:5, ~rfMetrics_model2[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "RF") 
+
+## Model 3: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors (Model 2) + neurocognitive factors ----------
+# Fit the random forest to the training data
+rfObjs_model3 <- map(trainTest_model3$trainingSets_list, rfHelper)
+# Predict on the test set
+rfPredictions_model3 <- map(rfObjs_model3, predict, trainTest_model3$testingData %>%
+                              dplyr::select(-c(BCaseControlStatus, PtID)))
+# Extract variable importance
+rfImportance_model3 <- map(rfObjs_model3, rfImportanceHelper)
+# Performance metrics
+rfMetrics_model3 <- map(rfPredictions_model3, confusionMatrix, reference = factor(trainTest_model3$testingData$BCaseControlStatus)) 
+rfPlotMetrics_model3 <- data.frame(reduce(map(1:5, ~rfMetrics_model3[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "RF") 
+
+## Model 4: Demographic and clinical variables (Model 1) + behavior and lifestyle factors (Model 2) + neurocognitive factors (Model 3) + CGM metrics -----------------------------------------------------------------------------------------------------------------------------------------
+# Fit the random forest to the training data
+rfObjs_model4 <- map(trainTest_model4$trainingSets_list, rfHelper)
+# Predict on the test set
+rfPredictions_model4 <- map(rfObjs_model4, predict, trainTest_model4$testingData %>%
+                              dplyr::select(-c(BCaseControlStatus, PtID)))
+# Extract variable importance
+rfImportance_model4 <- map(rfObjs_model4, rfImportanceHelper)
+# Performance metrics
+rfMetrics_model4 <- map(rfPredictions_model4, confusionMatrix, reference = factor(trainTest_model4$testingData$BCaseControlStatus)) 
+rfPlotMetrics_model4 <- data.frame(reduce(map(1:5, ~rfMetrics_model4[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "RF") 
+```
+
+## L1-regularized Logistic Regression
+
+```{r, eval = FALSE}
+## Model 1: Demographic and clinical variables ----------------------------------------------------------------
+# Fit the model on the training data
+regLogisticRegObj_model1 <- map(trainTest_model1$trainingSets_list, regLogisticReg_helper_model1) 
+# Predict on the test data
+regLogisticRegPredictions_model1 <- map(regLogisticRegObj_model1, predict, convertTestCategoricalToBinary_model1(trainTest_model1$testingData)) 
+# Extract variable importance
+regLogisticRegImportance_model1 <- map(regLogisticRegObj_model1, varImp) 
+# Get performance metrics
+regLogMetrics_model1 <- map(regLogisticRegPredictions_model1, confusionMatrix, reference = factor(trainTest_model1$testingData$BCaseControlStatus))
+regLogPlotMetrics_model1 <- data.frame(reduce(map(1:5, ~regLogMetrics_model1[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "LR") 
+
+## Model 2: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors --------------------
+# Fit the model on the training data
+regLogisticRegObj_model2 <- map(trainTest_model2$trainingSets_list, regLogisticReg_helper_model2) 
+# Predict on the test data
+regLogisticRegPredictions_model2 <- map(regLogisticRegObj_model2, predict, convertTestCategoricalToBinary_model2(trainTest_model2$testingData)) 
+# Extract variable importance
+regLogisticRegImportance_model2 <- map(regLogisticRegObj_model2, varImp) 
+# Get performance metrics
+regLogMetrics_model2 <- map(regLogisticRegPredictions_model2, confusionMatrix, reference = factor(trainTest_model2$testingData$BCaseControlStatus))
+regLogPlotMetrics_model2 <- data.frame(reduce(map(1:5, ~regLogMetrics_model2[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "LR") 
+
+## Model 3: Demographic and clinical variables (Model 1) + behavioral and lifestyle factors (Model 2) + neurocognitive factors ----------
+# Fit the model on the training data
+regLogisticRegObj_model3 <- map(trainTest_model3$trainingSets_list, regLogisticReg_helper_model2) 
+# Predict on the test data
+regLogisticRegPredictions_model3 <- map(regLogisticRegObj_model3, predict, convertTestCategoricalToBinary_model2(trainTest_model3$testingData)) 
+# Extract variable importance
+regLogisticRegImportance_model3 <- map(regLogisticRegObj_model3, varImp) 
+# Get performance metrics
+regLogMetrics_model3 <- map(regLogisticRegPredictions_model3, confusionMatrix, reference = factor(trainTest_model3$testingData$BCaseControlStatus))
+regLogPlotMetrics_model3 <- data.frame(reduce(map(1:5, ~regLogMetrics_model3[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "LR") 
+
+## Model 4: Demographic and clinical variables (Model 1) + behavior and lifestyle factors (Model 2) + neurocognitive factors (Model 3) + CGM metrics -----------------------------------------------------------------------------------------------------------------------------------------
+regLogisticRegObj_model4 <- map(trainTest_model4$trainingSets_list, regLogisticReg_helper_model2) 
+# Predict on the test data
+regLogisticRegPredictions_model4 <- map(regLogisticRegObj_model4, predict, convertTestCategoricalToBinary_model2(trainTest_model4$testingData)) 
+# Extract variable importance
+regLogisticRegImportance_model4 <- map(regLogisticRegObj_model4, varImp) 
+# Get performance metrics
+regLogMetrics_model4 <- map(regLogisticRegPredictions_model4, confusionMatrix, reference = factor(trainTest_model4$testingData$BCaseControlStatus))
+regLogPlotMetrics_model4 <- data.frame(reduce(map(1:5, ~regLogMetrics_model4[[.]]$byClass), rbind)) %>% 
+  mutate(Method = "LR") 
+```
+
+## Performance
+```{r}
+rfPlotMetrics_model1 %>% summarise_all(mean) %>%
+  mutate_all(round, 3)
+rfPlotMetrics_model2 %>% summarise_all(mean) %>%
+  mutate_all(round, 3)
+rfPlotMetrics_model3 %>% summarise_all(mean) %>%
+  mutate_all(round, 3)
+rfPlotMetrics_model4 %>% summarise_all(mean) %>%
+  mutate_all(round, 3)
+
+# regLogPlotMetrics_model1 %>% summarise_all(mean) %>%
+#   mutate_all(round, 3)
+# regLogPlotMetrics_model2 %>% summarise_all(mean) %>%
+#   mutate_all(round, 3)
+# regLogPlotMetrics_model3 %>% summarise_all(mean) %>%
+#   mutate_all(round, 3)
+# regLogPlotMetrics_model4 %>% summarise_all(mean) %>%
+#   mutate_all(round, 3)
+```
+
+## Variable importance
+```{r}
+rfImportance_model1df <- reduce(rfImportance_model1, function(x, y){left_join(x, y, by = "predictor")}) 
+names(rfImportance_model1df) <- c("predictor", "fold1", "fold2", "fold3", "fold4", "fold5")
+rfImportance_model1df <- rfImportance_model1df %>%
+  group_by(predictor) %>%
+  rowwise() %>%
+  summarise(meanDecreaseGini_model1 = mean(fold1:fold5)) %>%
+  arrange(desc(meanDecreaseGini_model1))
+
+
+rfImportance_model2df <- reduce(rfImportance_model2, function(x, y){left_join(x, y, by = "predictor")}) 
+names(rfImportance_model2df) <- c("predictor", "fold1", "fold2", "fold3", "fold4", "fold5")
+rfImportance_model2df <- rfImportance_model2df %>%
+  group_by(predictor) %>%
+  rowwise() %>%
+  summarise(meanDecreaseGini_model2 = mean(fold1:fold5)) %>%
+  arrange(desc(meanDecreaseGini_model2))
+
+rfImportance_model3df <- reduce(rfImportance_model3, function(x, y){left_join(x, y, by = "predictor")}) 
+names(rfImportance_model3df) <- c("predictor", "fold1", "fold2", "fold3", "fold4", "fold5")
+rfImportance_model3df <- rfImportance_model3df %>%
+  group_by(predictor) %>%
+  rowwise() %>%
+  summarise(meanDecreaseGini_model3 = mean(fold1:fold5)) %>%
+  arrange(desc(meanDecreaseGini_model3))
+
+rfImportance_model4df <- reduce(rfImportance_model4, function(x, y){left_join(x, y, by = "predictor")}) 
+names(rfImportance_model4df) <- c("predictor", "fold1", "fold2", "fold3", "fold4", "fold5")
+rfImportance_model4df <- rfImportance_model4df %>%
+  group_by(predictor) %>%
+  rowwise() %>%
+  summarise(meanDecreaseGini_model4 = mean(fold1:fold5)) %>%
+  arrange(desc(meanDecreaseGini_model4))
+
+write_csv(rfImportance_model1df, file = "../3_output/rfImportance_model1.csv")
+write_csv(rfImportance_model2df, file = "../3_output/rfImportance_model2.csv")
+write_csv(rfImportance_model3df, file = "../3_output/rfImportance_model3.csv")
+write_csv(rfImportance_model4df, file = "../3_output/rfImportance_model4.csv")
+
+meanDecreaseGiniPlot <- bind_rows(rfImportance_model1df %>% mutate(model = "Model 1: Demographic and clinical") %>% 
+                                    rename(meanDecreaseGini = meanDecreaseGini_model1), 
+                                  rfImportance_model2df %>% mutate(model = "Model 2: Model 1 + Behavioral and lifestyle") %>% 
+                                    rename(meanDecreaseGini = meanDecreaseGini_model2), 
+                                  rfImportance_model3df %>% mutate(model = "Model 3: Model 2 + Neurocognitive") %>% 
+                                    rename(meanDecreaseGini = meanDecreaseGini_model3), 
+                                  rfImportance_model4df %>% mutate(model = "Model 4: Model 3 + CGM measures") %>% 
+                                    rename(meanDecreaseGini = meanDecreaseGini_model4)) %>%
+  mutate(predictor = if_else(predictor == "hypoUnaware", "Hypoglycemia unawareness", predictor),
+         predictor = if_else(predictor == "glucoseMonitoringCat", "Glucose monitoring", predictor),
+         predictor = if_else(predictor == "frailty", "Frailty", predictor),
+         predictor = if_else(predictor == "insDoseCat", "Insulin dose", predictor),
+         predictor = if_else(predictor == "educationCat", "Education", predictor),
+         predictor = if_else(predictor == "insurance", "Insurance", predictor),
+         predictor = if_else(predictor == "betaBlocker", "Beta blocker", predictor),
+         predictor = if_else(predictor == "Gender", "Sex", predictor),
+         predictor = if_else(predictor == "bmiCat", "BMI", predictor),
+         predictor = if_else(predictor == "nonHispWhite", "Non-Hispanic White", predictor),
+         predictor = if_else(predictor == "detectableCPEP", "Detectable C-peptide", predictor),
+         predictor = if_else(predictor == "abnormalCreatinine", "Abnormal creatinine", predictor),
+         predictor = if_else(predictor == "hypoFear", "Hypoglycemia fear", predictor),
+         predictor = if_else(predictor == "DaysWkEx", "Exercise", predictor),
+         predictor = if_else(predictor == "TrailMakATotTime", "Trail making test A", predictor),
+         predictor = if_else(predictor == "TrailMakBTotTime", "Trail making test B", predictor),
+         predictor = if_else(predictor == "SymbDigWTotCorr", "Symbolic digit modalities (written)", predictor),
+         predictor = if_else(predictor == "GrPegDomTotTime", "Grooved pegboard test", predictor),
+         predictor = if_else(predictor == "DukeSocTotDSSI", "Duke social support scale", predictor),
+         predictor = if_else(predictor == "MoCATotal", "Montreal cognitive assessment", predictor),
+         predictor = if_else(predictor == "FuncActTotTestScore", "Functional activities questionnaire", predictor),
+         predictor = if_else(predictor == "pctCV", "Glucose variability", predictor), 
+         predictor = if_else(predictor == "bgLess70_pct", "% time glood glucose <70 mg/dL", predictor)) %>%
+  ggplot(aes(x = meanDecreaseGini, y = reorder(predictor, meanDecreaseGini), group_by = model, color = model)) +
+  geom_point() +
+  facet_wrap(~model, scales = "free") +
+  theme_minimal() +
+  ylab("Individual-level factor") +
+  xlab("Mean decrease Gini (factor importance)") +
+  scale_color_discrete(name = "Model") +
+  theme(legend.position = "none")
+
+ggsave(filename = "../3_output/meanDecreaseGiniPlot.png", plot = meanDecreaseGiniPlot, bg = "white", device = "png",
+       width = 14, height = 7, units = "in")
+```
+
+
+<!-- # Random forest -->
+<!-- ## Model fitting -->
+
+<!-- This code chunk fits a RF to the training sets, generates predictions for the testing set, and extracts the variable importance for the trained models. -->
+
+<!-- ```{r} -->
+
+<!-- rfObjs <- map(trainTest$trainingSets_list, rfHelper) -->
+
+<!-- rfPredictions <- map(rfObjs, predict, newdata = trainTest$testingData %>%  -->
+<!--                        dplyr::select(-c(BCaseControlStatus, PtID))) -->
+
+<!-- rfImportance <- map(rfObjs, rfImportanceHelper) -->
+
+<!-- ``` -->
+
+<!-- ## Model assessment -->
+
+<!-- This chunk grabs the prediction metrics for the RF model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot. -->
+
+<!-- ```{r} -->
+<!-- rf_metrics <- map(rfPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus)) -->
+
+<!-- rf_plotMetrics <- data.frame(reduce(map(1:5, ~rf_metrics[[.]]$byClass), rbind)) %>% -->
+<!--   mutate(Method = "RF") -->
+<!-- ``` -->
+
+
+<!-- # L1-Regularized logistic regression -->
+<!-- ## Model fitting -->
+
+<!-- This code chunk fits a LR model to the training sets, generates predictions for the testing set, and extracts the variable importance for the trained models. -->
+
+<!-- ```{r} -->
+
+<!-- regLogisticRegObj <- map(trainTest$trainingSets_list, regLogisticReg_helper)   -->
+
+<!-- regLogisticRegPredictions <- map(regLogisticRegObj, predict, convertTestCategoricalToBinary(trainTest$testingData)) -->
+
+<!-- regLogisticRegImportance <- map(regLogisticRegObj, varImp) -->
+
+<!-- ``` -->
+
+
+<!-- ## Model assessment -->
+
+<!-- This chunk grabs the prediction metrics for the LR model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot. -->
+
+<!-- ```{r} -->
+<!-- regLog_metrics <- map(regLogisticRegPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus)) -->
+<!-- regLog_plotMetrics <- data.frame(reduce(map(1:5, ~regLog_metrics[[.]]$byClass), rbind)) %>% -->
+<!--   mutate(Method = "LR") -->
+<!-- ``` -->
+
+
+<!-- # SVM -->
+
+<!-- ## Model fitting -->
+
+<!-- This code chunk fits a SVM model to the training sets and generates predictions for the testing set. -->
+
+<!-- ```{r} -->
+
+<!-- svmHelper <- function(trainingSet){ -->
+<!--   temp <- convertTrainingCategoricalToBinary(trainingSet)  -->
+<!--   e1071::svm(x = temp, y = as.factor(trainingSet$BCaseControlStatus)) -->
+<!-- } -->
+
+<!-- svmObjs <- map(trainTest$trainingSets_list, svmHelper) -->
+
+<!-- svmPredictions <- map(svmObjs, predict, convertTestCategoricalToBinary_svm(trainTest$testingData)) -->
+
+<!-- ``` -->
+
+
+<!-- ## Model assessment -->
+
+<!-- This chunk grabs the prediction metrics for the LR model and creates a dataframe of the prediction metrics that will be used for the prediction performance plot. -->
+
+<!-- ```{r} -->
+<!-- svm_metrics <- map(svmPredictions, confusionMatrix, reference = factor(trainTest$testingData$BCaseControlStatus)) -->
+<!-- svm_plotMetrics <- data.frame(reduce(map(1:5, ~svm_metrics[[.]]$byClass), rbind)) %>% -->
+<!--   mutate(Method = "SVM") -->
+<!-- ``` -->
+
+
+<!-- # Prediction performance plots -->
+
+<!-- This chunk generates the predictive performance plots.  -->
+
+<!-- ```{r} -->
+<!-- predPerfDF <- bind_rows(rf_plotMetrics, regLog_plotMetrics) %>% -->
+<!--   # bind_rows(rf_plotMetrics, regLog_plotMetrics, svm_plotMetrics) %>% -->
+<!--   mutate(fold = rep(1:5, 2)) %>% -->
+<!--   dplyr::select(Method, fold, Sensitivity, Specificity, Precision) %>%  -->
+<!--   pivot_longer(cols = c(Sensitivity, Specificity, Precision),  -->
+<!--                names_to = "metric", values_to = "value") %>% -->
+<!--   replace_na(list(value = 0)) -->
+
+<!-- predPerfPlot <- predPerfDF %>%  -->
+<!--   ggplot(aes(x = Method, y = value, color = Method)) + -->
+<!--   geom_point(size = 3) + -->
+<!--   facet_wrap(~metric) + -->
+<!--   theme_minimal() + -->
+<!--   labs(y = element_blank(), x = element_blank()) + -->
+<!--   scale_y_continuous(breaks = seq(0.4, 1.0, by = 0.1), labels = c(as.character(seq(0.4, 0.9, by = 0.1)), "1.0"), -->
+<!--                      limits = c(0.4, 1.0)) + -->
+<!--   theme(legend.position = "bottom", -->
+<!--         panel.border = element_rect(color = "black", linewidth = 1, fill = NA), -->
+<!--         strip.text = element_text(size = 14), -->
+<!--         axis.text = element_text(size = 12), -->
+<!--         legend.text = element_text(size = 12)) -->
+
+<!-- predPerfPlot -->
+
+<!-- ggsave(predPerfPlot, file = "../3_output/0_predPerfPlot.png", device = "png", -->
+<!--        bg = "white", width = 12, height = 6, units = "in") -->
+<!-- ``` -->
+
+<!-- # Average predictive performance -->
+<!-- ```{r} -->
+<!-- # Average of the predictive performance measures across folds -->
+<!-- predPerfDF %>% -->
+<!--   group_by(Method, metric) %>% -->
+<!--   summarise(mean = round(mean(value), 2), -->
+<!--             sd = round(sd(value), 2)) %>% -->
+<!--   arrange(metric) -->
+
+<!-- # Average accuracy, etc across folds -->
+<!-- round(colMeans(reduce(map(rf_metrics, ~pluck(., "overall")), rbind)), 2) -->
+
+<!-- round(colMeans(reduce(map(regLog_metrics, ~pluck(., "overall")), rbind)), 2) -->
+
+<!-- round(colMeans(reduce(map(svm_metrics, ~pluck(., "overall")), rbind)), 2) -->
+<!-- ``` -->
+
+
+<!-- # Variable importance -->
+
+<!-- ```{r} -->
+<!-- data.frame(reduce(map2(1:5,rfImportance, function(x, y) y %>% mutate(fold = x)), rbind)) %>% -->
+<!--   arrange(fold, desc(MeanDecreaseGini)) %>% -->
+<!--   group_by(fold) %>% -->
+<!--   slice_max(MeanDecreaseGini, n = 10) -->
+
+<!-- reduce(map(1:5, function(x){regLogisticRegImportance[[x]]$importance %>%  -->
+<!--     rownames_to_column() %>% -->
+<!--     arrange(desc(Overall)) %>% -->
+<!--     mutate(fold = x)}), bind_rows) %>% -->
+<!--   write_csv("../3_output/regLogisticVariableImportance.csv") -->
+
+<!-- reduce(map(1:5, function(x){rfImportance[[x]] %>% mutate(fold = x)}), bind_rows) %>% -->
+<!--   write_csv("../3_output/rfVariableImportance.csv") -->
+<!-- ``` -->
+
+<!-- # Descriptives table  -->
+
+```{r}
+table1df <- analysisWithMissing %>%
+  filter(str_detect(exclude, "No")) %>%
+  mutate(Gender = factor(Gender, levels = c("F", "M"), labels = c("Female", "Male")),
+         `Non-Hispanic White` = factor(nonHispWhite, levels = c(1, 0), labels = c("Yes", "No")),
+         `Exercise (days per week)` = DaysWkEx,
+         `Lives alone` = LiveAlone,
+         `Insulin delivery method` = InsDeliveryMethod,
+         # `Units Insulin (bolus or long acting)` = UnitsInsBasalOrLongAct,
+         `Number boluses or injections short acting per day` = NumPumpBolusOrShortAct,
+         `Hospitalized DKA in last year` = factor(hospWithDKA, levels = c(0, 1),
+                                                  labels = c("No", "Yes")),
+         HBA1C = as.numeric(HBA1C),
+         # `Glucose` = GLU,
+         # `CGM %Glucose <70 (day)` = bgLess70_pct_day,
+         # `CGM %Glucose <70 (night)` = bgLess70_pct_night,
+         # `CGM %Glucose >180 (day)` = bgGreater180_pct_day,
+         # `CGM %Glucose >180 (night)` = bgGreater180_pct_night,
+         # `Mean Glucose (day)` = meanGlucose_day,
+         # `Mean Glucose (night)` = meanGlucose_night,
+         # `%CV (day)` = pctCV_day,
+         # `%CV (night)` = pctCV_night,
+         `Beta blocker use` = factor(betaBlocker, levels = c(1, 0), labels = c("Yes", "no")),
+         `Symbolic Digits Written test` = SymbDigWTotCorr,
+         `Symbolic Digits Oral test` = SymbDigOTotCorr,
+         # `Hopkins Verbal Learning test - Total` = hopkinsTotal,
+         # `Hopkins Verbal Learning test - Recall` = hopkinsRecall,
+         `Trail Making test A` = TrailMakATotTime,
+         `Trail Making test B` = TrailMakBTotTime,
+         `Grooved Peg Board test (dominant hand)` = GrPegDomTotTime,
+         # `Functional Activity score` = FuncActTotTestScore,
+         `Duke Social Support scale` = DukeSocTotDSSI,
+         # `Geriatric Depression score` = geriDepressionScore,
+         `Hyperglycemia fear score` = hyperFear,
+         `Hypoglycemia unawareness` = factor(hypoUnaware, levels = c("hypo aware", "reduced awareness", "unaware"),
+                                             labels = c("Aware", "Reduced awareness", "Unaware")),
+         # `Diabetes Numeracy score` = diabNumeracyScore,
+         `Montreal Cognitive Assessment score` = MoCATotal,
+         `Functional activities questionnaire` = FuncActTotTestScore,
+         `Blood glucose <70 %` = bgLess70_pct,
+         `Blood glucose variability` = pctCV,
+         `Education` = factor(educationCat, levels = c("HS", "College", "Advanced degree"),
+                              labels = c("<= HS", "Any college", "Advanced degree")),
+         `Insurance` = factor(insurance, levels = c("Government and commercial", "Only commercial", "Only government", "None"),
+                                  labels = c("Government and commercial", "Only commercial", "Only government", "None")),
+         `Annual Income` = factor(annualIncomeCat, levels = c("<35k", "35-50k", "50-100k", ">100k"),
+                                  labels = c("<$35,000", "$35,000 to < $50,000", "$50,000 to < $100,000", ">= $100,000")),
+         # `Alcohol use (days per month)` = DaysMoDrinkAlc,
+         # `At least 1 day/month binge drinking` = factor(bingeAlc, levels = c(0, 1),
+                                                        # labels = c("No", "Yes")),
+         `Insulin dose` = factor(insDoseCat, levels = c("less40", "40to60", "greater60"),
+                                 labels = c("<40", "40-60", ">60")),
+         `Home blood glucose monitoring (times/day)` = factor(glucoseMonitoringCat,
+                                                              levels = c("0", "1-3", "4", "5-6", "7-9", ">=10"),
+                                                              labels = c("0", "1-3", "4", "5-6", "7-9", ">=10")),
+         `Detectable C-peptide` = factor(detectableCPEP, levels = c(0, 1),
+                                         labels = c("<0.017", ">=0.017")),
+         `Abnormal creatinine` = factor(abnormalCreatinine, levels = c(0, 1),
+                                        labels = c("<=1.1 females/<=1.2 males", ">1.1 females/>1.2 males")),
+         `Average frailty walk time` = frailty,
+         `BMI category` = factor(bmiCat, levels = c("underweight or normal weight", "overweight", "obese"),
+                                 labels = c("Underweight or normal weight", "Overweight", "Obese")))
+
+
+table1_out <- table1(~ Gender + `Non-Hispanic White` +
+         `Education` + `Annual Income` + `Insurance` + `BMI category` +
+         `Exercise (days per week)` +
+         `Lives alone` +
+           # `Alcohol use (days per month)` +
+          # `At least 1 day/month binge drinking` +
+         `Insulin delivery method` +
+           `Insulin dose` +
+         `Number boluses or injections short acting per day` +
+          `Home blood glucose monitoring (times/day)` +
+         `Hospitalized DKA in last year` + HBA1C + `Detectable C-peptide` +
+           # Glucose +
+         #  `CGM %Glucose <70 (day)` +
+         # `CGM %Glucose <70 (night)` +
+         # `CGM %Glucose >180 (day)` +
+         # `CGM %Glucose >180 (night)` +
+         # `Mean Glucose (day)` +
+         # `Mean Glucose (night)` +
+         # `%CV (day)` +
+         # `%CV (night)` +
+         `Abnormal creatinine` + `Beta blocker use` +
+         `Symbolic Digits Written test` + `Symbolic Digits Oral test` +
+          # `Hopkins Verbal Learning test - Total` + `Hopkins Verbal Learning test - Recall` +
+         `Trail Making test A` + `Trail Making test B` +
+          `Grooved Peg Board test (dominant hand)` +
+         # `Functional Activity score` +
+           `Duke Social Support scale` +
+         # `Geriatric Depression score` +
+           `Hypoglycemia unawareness` +
+           `Hyperglycemia fear score` +
+         # `Diabetes Numeracy score` +
+           `Montreal Cognitive Assessment score` +
+         `Average frailty walk time` +
+           `Functional activities questionnaire` +
+         `Blood glucose <70 %` +
+         `Blood glucose variability`
+         | BCaseControlStatus, data = table1df)
+# Knitted table
+table1_out
+
+# Create the latex table
+print(xtable(as.data.frame(table1_out)), include.rownames = FALSE)
+```
+
