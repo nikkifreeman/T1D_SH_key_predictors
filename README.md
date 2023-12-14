@@ -14,4 +14,4 @@ Figure 1. Models. We tested four models that were successively more complex, inc
       * Functions related to imputation are in ./1_code/3_imputation.R
       * Functions related to fitting the random forest are in ./1_code/4_randomForest.R
   
-  3. The data tables are in SevereHypoDataset-c14d3739-6a20-449c-bbae-c02ff1764a91
+  3. The data used in this analysis are publicly available from the JAEB Center for Health Research (https://www.jaeb.org/). The data are not included in this repo.
